@@ -1,0 +1,5 @@
+{
+  "name": "eBay Motors Listing Generator",
+  "description": "An AI-powered tool to help you create compelling eBay listings for used auto parts. Upload photos of the part and its serial number, and the app will extract the part number, research it, and generate a detailed description with ACES/PIES compatibility data.",
+  "requestFramePermissions": []
+}
