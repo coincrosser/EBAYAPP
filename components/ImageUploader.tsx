@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 interface ImageUploaderProps {
@@ -20,6 +19,8 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
     if (event.target.files && event.target.files[0]) {
       onImageUpload(event.target.files[0]);
     }
+    // Reset file input to allow re-uploading the same file after clearing.
+    event.target.value = '';
   };
 
   const ImageIcon = () => (
@@ -30,8 +31,12 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
 
   return (
     <div className="flex flex-col items-center justify-center w-full">
-      <label htmlFor={id} className="text-lg font-semibold text-gray-300 mb-2">{label}</label>
-      <div className="relative w-full h-48 md:h-64 border-2 border-dashed border-gray-600 rounded-lg flex flex-col justify-center items-center cursor-pointer hover:border-blue-400 transition-colors duration-300 bg-gray-800">
+      <p id={`${id}-label`} className="text-lg font-semibold text-gray-300 mb-2">{label}</p>
+      <label 
+        htmlFor={id}
+        aria-labelledby={`${id}-label`}
+        className="relative w-full h-48 md:h-64 border-2 border-dashed border-gray-600 rounded-lg flex flex-col justify-center items-center cursor-pointer hover:border-blue-400 transition-colors duration-300 bg-gray-800"
+      >
         {imagePreviewUrl ? (
           <>
             <img src={imagePreviewUrl} alt="Preview" className="w-full h-full object-contain rounded-lg p-1" />
@@ -52,13 +57,20 @@ export const ImageUploader: React.FC<ImageUploaderProps> = ({
           <div className="text-center">
             <ImageIcon />
             <p className="mt-2 text-sm text-gray-400">
-              <span className="font-semibold">Click to upload</span> or drag and drop
+              <span className="font-semibold">Tap to upload</span> or drag and drop
             </p>
             <p className="text-xs text-gray-500">PNG, JPG, GIF up to 10MB</p>
           </div>
         )}
-        <input id={id} name={id} type="file" className="sr-only" accept="image/*" onChange={handleFileChange} />
-      </div>
+        <input 
+          id={id} 
+          name={id} 
+          type="file" 
+          className="sr-only" 
+          accept="image/*" 
+          onChange={handleFileChange} 
+        />
+      </label>
     </div>
   );
 };

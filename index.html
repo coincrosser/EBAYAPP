@@ -1,11 +1,10 @@
-
 <!DOCTYPE html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>eBay Motors Listing Generator</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>RapidListingTool.com | AI Auto Parts Lister</title>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
     <script src="env.js"></script>
     <style>
       /* For Webkit-based browsers (Chrome, Safari, etc.) */
@@ -14,16 +13,22 @@
       }
 
       ::-webkit-scrollbar-track {
-          background: #2d3748; /* dark-gray-800 */
+          background: #1a202c; /* gray-900 */
       }
 
       ::-webkit-scrollbar-thumb {
-          background: #4a5568; /* dark-gray-600 */
+          background: #4a5568; /* gray-600 */
           border-radius: 4px;
       }
 
       ::-webkit-scrollbar-thumb:hover {
-          background: #718096; /* dark-gray-500 */
+          background: #718096; /* gray-500 */
+      }
+      
+      .glass-panel {
+        background: rgba(17, 24, 39, 0.7);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
       }
     </style>
   <script type="importmap">
@@ -37,7 +42,7 @@
 }
 </script>
 </head>
-  <body class="bg-gray-900 text-gray-100">
+  <body class="bg-gray-950 text-gray-100 selection:bg-fuchsia-500 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
