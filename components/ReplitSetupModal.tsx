@@ -47,7 +47,7 @@ if (!API_KEY) {
 }
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-export type ListingStyle = 'professional' | 'minimalist' | 'table-layout';
+export type ListingStyle = 'professional' | 'minimalist' | 'table-layout' | 'bold-classic' | 'modern-card';
 
 const imageDataUrlToGenerativePart = (dataUrl: string) => {
   const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
@@ -171,6 +171,44 @@ const getStyleInstruction = (style: ListingStyle, partNumber: string, compatibil
                     <p><strong>Stock Note:</strong> Item is a genuine OEM part harvested from our rebuild projects.</p>
                 4.  <h3>Compatibility</h3>
                     \${compatibilityHtml}
+        \`;
+    } else if (style === 'bold-classic') {
+        return \`
+            \${commonInstructions}
+
+            **Description Generation (Bold Classic HTML Format):**
+            *   Use a structured, high-contrast layout with horizontal rules.
+            *   Wrap content in an <article> tag.
+            *   Structure:
+                1.  <h1 style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px;">Title</h1>
+                2.  <div style="text-align: center; margin: 20px 0;">
+                        <span style="font-size: 1.2em; font-weight: bold;">Part Number: \${partNumber}</span>
+                    </div>
+                3.  <hr />
+                4.  <h3>Item Description</h3>
+                    <p>[Analyze image and describe the item]</p>
+                5.  <hr />
+                6.  <h3>Vehicle Fitment</h3>
+                    \${compatibilityHtml}
+        \`;
+    } else if (style === 'modern-card') {
+        return \`
+            \${commonInstructions}
+
+            **Description Generation (Modern Card HTML Format):**
+            *   Create a contained, card-style look.
+            *   Wrap content in an <article style="border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; font-family: sans-serif;">.
+            *   Structure:
+                1.  <div style="background-color: #f3f4f6; padding: 20px; border-bottom: 1px solid #e5e7eb;">
+                        <h2 style="margin: 0; color: #111827;">Title</h2>
+                        <p style="margin: 10px 0 0; color: #4b5563;">Part #: <strong>\${partNumber}</strong> | Condition: <strong>Used OEM</strong></p>
+                    </div>
+                2.  <div style="padding: 20px;">
+                        <h3 style="color: #374151;">Details</h3>
+                        <p>[Analyze image and describe the item]</p>
+                        <h3 style="color: #374151; margin-top: 20px;">Fitment Data</h3>
+                        \${compatibilityHtml}
+                    </div>
         \`;
     } else {
         // Professional (Default / LKQ Style)
@@ -715,7 +753,7 @@ export default function App() {
   const handleSaveDraft = () => {
     if (!partImage && !serialImage && !manualPartNumber) { setError("Cannot save empty draft."); return; }
     try {
-      const newDraft: SavedDraft = { id: crypto.randomUUID(), timestamp: Date.now(), partImageBase64: partImage?.base64, serialImageBase64: serialImage?.base64, partNumber: manualPartNumber };
+      const newDraft: SavedDraft = { id: crypto.randomUUID(), timestamp: Date.now(), partNumber: manualPartNumber };
       const updated = [newDraft, ...savedDrafts].slice(0, 10);
       setSavedDrafts(updated);
       localStorage.setItem('rapid_listing_drafts', JSON.stringify(updated));
@@ -738,11 +776,9 @@ export default function App() {
     setIsLoading(true);
     try {
       setManualPartNumber(draft.partNumber || ''); setListing(null); setCompatibilityData(null); setError(null);
-      if (draft.partImageBase64) setPartImage({ file: await base64ToFile(draft.partImageBase64, "draft_p.png"), base64: draft.partImageBase64 });
-      else setPartImage(null);
-      if (draft.serialImageBase64) setSerialImage({ file: await base64ToFile(draft.serialImageBase64, "draft_s.png"), base64: draft.serialImageBase64 });
-      else setSerialImage(null);
+      setPartImage(null); setSerialImage(null);
       setIsHistoryOpen(false); window.scrollTo({ top: 0, behavior: 'smooth' });
+      setError("Draft loaded. Please re-upload your images (images are not saved to save space).");
     } catch (e) { setError("Failed to restore draft."); } finally { setIsLoading(false); }
   };
 
@@ -806,6 +842,8 @@ export default function App() {
                                     <option value="professional">Professional (Standard)</option>
                                     <option value="minimalist">Minimalist (Mobile Friendly)</option>
                                     <option value="table-layout">Table Layout (Structured)</option>
+                                    <option value="bold-classic">Bold Classic (High Contrast)</option>
+                                    <option value="modern-card">Modern Card (Boxed Layout)</option>
                                 </select>
                             </div>
                             <div className="flex gap-3">

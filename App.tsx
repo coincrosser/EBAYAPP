@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultCard } from './components/ResultCard';
@@ -81,8 +80,8 @@ export default function App() {
       const newDraft: SavedDraft = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
-        partImageBase64: partImage?.base64,
-        serialImageBase64: serialImage?.base64,
+        // partImageBase64: partImage?.base64, // Images removed to save storage space
+        // serialImageBase64: serialImage?.base64,
         partNumber: manualPartNumber,
       };
 
@@ -126,24 +125,15 @@ export default function App() {
       setCompatibilityData(null);
       setError(null);
 
-      if (draft.partImageBase64) {
-        const file = await base64ToFile(draft.partImageBase64, "draft_part_image.png");
-        setPartImage({ file, base64: draft.partImageBase64 });
-      } else {
-        setPartImage(null);
-      }
-
-      if (draft.serialImageBase64) {
-        const file = await base64ToFile(draft.serialImageBase64, "draft_serial_image.png");
-        setSerialImage({ file, base64: draft.serialImageBase64 });
-      } else {
-        setSerialImage(null);
-      }
+      // Drafts now only store text, so we clear images and prompt user
+      setPartImage(null);
+      setSerialImage(null);
       
       setIsHistoryOpen(false);
       window.scrollTo({ top: 0, behavior: 'smooth' });
+      setError("Draft loaded. Please re-upload your images (images are not saved to save space).");
     } catch (e) {
-      setError("Failed to restore draft images.");
+      setError("Failed to restore draft.");
     } finally {
       setIsLoading(false);
     }
@@ -332,6 +322,8 @@ export default function App() {
                         <option value="professional">Professional (Standard)</option>
                         <option value="minimalist">Minimalist (Mobile Friendly)</option>
                         <option value="table-layout">Table Layout (Structured)</option>
+                        <option value="bold-classic">Bold Classic (High Contrast)</option>
+                        <option value="modern-card">Modern Card (Boxed Layout)</option>
                     </select>
                   </div>
                   
