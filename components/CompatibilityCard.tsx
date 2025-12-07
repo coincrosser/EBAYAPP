@@ -1,12 +1,12 @@
-
 import React, { useState } from 'react';
 
 interface CompatibilityCardProps {
   partNumber: string;
   compatibilityHtml: string;
+  titleOverride?: string;
 }
 
-export const CompatibilityCard: React.FC<CompatibilityCardProps> = ({ partNumber, compatibilityHtml }) => {
+export const CompatibilityCard: React.FC<CompatibilityCardProps> = ({ partNumber, compatibilityHtml, titleOverride }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -14,7 +14,7 @@ export const CompatibilityCard: React.FC<CompatibilityCardProps> = ({ partNumber
     tempDiv.innerHTML = compatibilityHtml;
     
     // A simple way to format table for plain text copy
-    let textToCopy = `Compatibility for ${partNumber}:\n\n`;
+    let textToCopy = `${titleOverride || 'Compatibility'} for ${partNumber}:\n\n`;
     const table = tempDiv.querySelector('table');
     if (table) {
         const rows = Array.from(table.querySelectorAll('tr'));
@@ -35,7 +35,7 @@ export const CompatibilityCard: React.FC<CompatibilityCardProps> = ({ partNumber
     <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl p-4 md:p-6 border border-gray-700">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 sm:gap-2">
         <h2 className="text-xl md:text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-cyan-400">
-          Compatibility for: <span className="text-white">{partNumber}</span>
+          {titleOverride || 'Compatibility'} for: <span className="text-white">{partNumber}</span>
         </h2>
         <div className="w-full sm:w-auto flex">
           <button

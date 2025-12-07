@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { downloadEbayCSV } from '../utils/csvExport';
+import { Platform } from '../services/geminiService';
+import { UserProfile } from './SettingsModal';
 
 export interface SavedScan {
   id: string;
@@ -8,6 +10,7 @@ export interface SavedScan {
   title: string;
   description: string;
   compatibilityHtml: string;
+  platform?: Platform; // New field to track platform type
 }
 
 export interface SavedDraft {
@@ -27,6 +30,7 @@ interface HistorySidebarProps {
   onDeleteScan: (id: string) => void;
   onLoadDraft: (draft: SavedDraft) => void;
   onDeleteDraft: (id: string) => void;
+  userProfile: UserProfile;
 }
 
 interface HistoryItemProps {
@@ -51,12 +55,21 @@ const HistoryItem: React.FC<HistoryItemProps> = ({ scan, onLoad, onDelete }) => 
     setTimeout(() => setCopyStatus('idle'), 2000);
   };
 
+  const getPlatformBadge = (p?: Platform) => {
+    if (p === 'facebook') return <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 text-[10px] border border-blue-800">FB</span>;
+    if (p === 'craigslist') return <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300 text-[10px] border border-purple-800">CL</span>;
+    return <span className="ml-2 px-1.5 py-0.5 rounded bg-green-900/50 text-green-300 text-[10px] border border-green-800">eBay</span>;
+  }
+
   return (
     <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-fuchsia-500/50 transition-colors group relative">
       <div className="flex justify-between items-start mb-2">
-        <span className="inline-block px-2 py-1 text-xs font-semibold bg-gray-700 text-fuchsia-300 rounded">
-          {scan.partNumber}
-        </span>
+        <div className="flex items-center">
+             <span className="inline-block px-2 py-1 text-xs font-semibold bg-gray-700 text-fuchsia-300 rounded">
+            {scan.partNumber}
+            </span>
+            {getPlatformBadge(scan.platform)}
+        </div>
         <span className="text-xs text-gray-500">
           {new Date(scan.timestamp).toLocaleDateString()}
         </span>
@@ -152,12 +165,13 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   onLoadScan,
   onDeleteScan,
   onLoadDraft,
-  onDeleteDraft
+  onDeleteDraft,
+  userProfile
 }) => {
   const [activeTab, setActiveTab] = useState<'history' | 'drafts'>('history');
   
   const handleExport = () => {
-    downloadEbayCSV(scans);
+    downloadEbayCSV(scans, userProfile);
   };
 
   return (
@@ -220,6 +234,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     <p className="text-sm">Click "Save Draft" while working to save for later.</p>
                 </div>
             ) : (
+                drafts.length === 0 ? (
+                  <div className="text-center text-gray-500 mt-10">
+                    <p className="mb-2">No saved drafts.</p>
+                  </div>
+                ) : (
                 drafts.map((draft) => (
                     <DraftItem 
                         key={draft.id}
@@ -228,6 +247,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                         onDelete={() => onDeleteDraft(draft.id)}
                     />
                 ))
+            )
             )
         )}
       </div>

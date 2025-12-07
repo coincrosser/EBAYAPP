@@ -2,13 +2,14 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultCard } from './components/ResultCard';
 import { Spinner } from './components/Spinner';
-import { extractPartNumberFromImage, generateListingContent, getCompatibilityData, ListingStyle } from './services/geminiService';
+import { extractIdentifierFromImage, generateListingContent, getProductData, ListingStyle, Platform, ScanType } from './services/geminiService';
 import { fileToBase64 } from './utils/fileUtils';
 import { CompatibilityCard } from './components/CompatibilityCard';
-import { ReplitSetupModal } from './components/ReplitSetupModal';
+import { FirebaseSetupModal } from './components/FirebaseSetupModal';
 import { Logo } from './components/Logo';
 import { HistorySidebar, SavedScan, SavedDraft } from './components/HistorySidebar';
 import { NotepadSidebar } from './components/NotepadSidebar';
+import { SettingsModal, UserProfile, DEFAULT_PROFILE } from './components/SettingsModal';
 
 // Helper to convert base64 back to file for state restoration
 const base64ToFile = async (base64: string, fileName: string): Promise<File> => {
@@ -18,6 +19,9 @@ const base64ToFile = async (base64: string, fileName: string): Promise<File> => 
 };
 
 export default function App() {
+  // State
+  const [scanType, setScanType] = useState<ScanType>('auto-part');
+  
   const [partImage, setPartImage] = useState<{ file: File; base64: string } | null>(null);
   const [serialImage, setSerialImage] = useState<{ file: File; base64: string } | null>(null);
   const [listing, setListing] = useState<{ title: string; description: string } | null>(null);
@@ -25,11 +29,11 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const [manualPartNumber, setManualPartNumber] = useState('');
-  const [compatibilityData, setCompatibilityData] = useState<string | null>(null);
-  const [isCompatibilityLoading, setIsCompatibilityLoading] = useState(false);
-  const [compatibilityError, setCompatibilityError] = useState<string | null>(null);
-  const [isReplitModalOpen, setIsReplitModalOpen] = useState(false);
+  const [manualIdentifier, setManualIdentifier] = useState('');
+  const [supplementalData, setSupplementalData] = useState<string | null>(null); // Fits both Auto Fitment and Product Specs
+  const [isLookupLoading, setIsLookupLoading] = useState(false);
+  const [lookupError, setLookupError] = useState<string | null>(null);
+  const [isFirebaseModalOpen, setIsFirebaseModalOpen] = useState(false);
 
   // History & Draft State
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
@@ -40,9 +44,19 @@ export default function App() {
   const [isNotepadOpen, setIsNotepadOpen] = useState(false);
   
   // Settings State
-  const [listingStyle, setListingStyle] = useState<ListingStyle>('professional');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfile>(DEFAULT_PROFILE);
 
-  // Load history and drafts from localStorage on mount
+  // Settings State
+  const [listingStyle, setListingStyle] = useState<ListingStyle>('professional');
+  const [platform, setPlatform] = useState<Platform>('ebay');
+
+  // FB/Craigslist Options
+  const [price, setPrice] = useState('');
+  const [location, setLocation] = useState('');
+  const [condition, setCondition] = useState('Used - Good');
+
+  // Load history, drafts, and profile from localStorage on mount
   useEffect(() => {
     try {
       const storedHistory = localStorage.getItem('rapid_listing_history');
@@ -53,10 +67,19 @@ export default function App() {
       if (storedDrafts) {
         setSavedDrafts(JSON.parse(storedDrafts));
       }
+      const storedProfile = localStorage.getItem('rapid_listing_profile');
+      if (storedProfile) {
+        setUserProfile(JSON.parse(storedProfile));
+      }
     } catch (e) {
       console.error("Failed to load local storage data", e);
     }
   }, []);
+
+  const saveProfile = (newProfile: UserProfile) => {
+    setUserProfile(newProfile);
+    localStorage.setItem('rapid_listing_profile', JSON.stringify(newProfile));
+  };
 
   const saveToHistory = (newScan: SavedScan) => {
     const updatedScans = [newScan, ...savedScans].slice(0, 50); // Keep last 50
@@ -71,7 +94,7 @@ export default function App() {
   };
 
   const handleSaveDraft = () => {
-    if (!partImage && !serialImage && !manualPartNumber) {
+    if (!partImage && !serialImage && !manualIdentifier) {
       setError("Cannot save an empty draft. Please upload images or enter a part number.");
       return;
     }
@@ -80,16 +103,12 @@ export default function App() {
       const newDraft: SavedDraft = {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
-        // partImageBase64: partImage?.base64, // Images removed to save storage space
-        // serialImageBase64: serialImage?.base64,
-        partNumber: manualPartNumber,
+        partNumber: manualIdentifier, // Storing identifier in partNumber field
       };
 
-      const updatedDrafts = [newDraft, ...savedDrafts].slice(0, 10); // Limit to 10 drafts to save space
+      const updatedDrafts = [newDraft, ...savedDrafts].slice(0, 10);
       setSavedDrafts(updatedDrafts);
       localStorage.setItem('rapid_listing_drafts', JSON.stringify(updatedDrafts));
-      
-      // Visual feedback
       setIsHistoryOpen(true);
     } catch (e) {
       setError("Storage limit reached. Please delete old drafts or history items.");
@@ -104,34 +123,35 @@ export default function App() {
 
   const loadScan = (scan: SavedScan) => {
     setListing({ title: scan.title, description: scan.description });
-    setCompatibilityData(scan.compatibilityHtml);
-    setManualPartNumber(scan.partNumber);
-    // Reset images/errors when loading from history
+    setSupplementalData(scan.compatibilityHtml);
+    setManualIdentifier(scan.partNumber);
+    setPlatform(scan.platform || 'ebay');
+    
+    // Attempt to guess scan type from content or default to auto
+    // In a future update, scanType should be saved in history
+    setScanType('auto-part'); 
+    
     setPartImage(null);
     setSerialImage(null);
     setError(null);
-    setCompatibilityError(null);
-    // Scroll to results
+    setLookupError(null);
     setTimeout(() => {
         window.scrollTo({ top: document.body.scrollHeight / 2, behavior: 'smooth' });
     }, 100);
   };
 
   const loadDraft = async (draft: SavedDraft) => {
-    setIsLoading(true); // Show loading state while processing images
+    setIsLoading(true);
     try {
-      setManualPartNumber(draft.partNumber || '');
+      setManualIdentifier(draft.partNumber || '');
       setListing(null);
-      setCompatibilityData(null);
+      setSupplementalData(null);
       setError(null);
-
-      // Drafts now only store text, so we clear images and prompt user
       setPartImage(null);
       setSerialImage(null);
-      
       setIsHistoryOpen(false);
       window.scrollTo({ top: 0, behavior: 'smooth' });
-      setError("Draft loaded. Please re-upload your images (images are not saved to save space).");
+      setError("Draft loaded. Please re-upload your images.");
     } catch (e) {
       setError("Failed to restore draft.");
     } finally {
@@ -154,41 +174,55 @@ export default function App() {
 
   const handleGenerateListing = async () => {
     if (!partImage || !serialImage) {
-      setError('Please upload both a part image and a serial number image.');
+      setError('Please upload both an Item photo and a Code/ID photo.');
       return;
     }
 
     setIsLoading(true);
     setError(null);
     setListing(null);
-    setCompatibilityData(null);
-    setCompatibilityError(null);
+    setSupplementalData(null);
+    setLookupError(null);
 
     try {
-      setCurrentStep('Extracting part number from image...');
-      const partNumber = await extractPartNumberFromImage(serialImage.base64);
+      const step1Text = scanType === 'auto-part' ? 'Extracting part number...' : 'Scanning barcode/UPC...';
+      setCurrentStep(step1Text);
+      const extractedId = await extractIdentifierFromImage(serialImage.base64, scanType);
 
-      if (!partNumber || partNumber.trim() === '') {
-        throw new Error("Could not extract a part number from the image. Please try a clearer picture.");
+      if (!extractedId || extractedId.trim() === '') {
+        throw new Error("Could not extract an identifier. Please try a clearer picture.");
       }
       
-      setCurrentStep(`Part number "${partNumber}" found. Researching vehicle compatibility...`);
-      const compatibilityHtml = await getCompatibilityData(partNumber);
+      const step2Text = scanType === 'auto-part' 
+        ? `Part #${extractedId} found. Checking fitment...` 
+        : `ID ${extractedId} found. Looking up product specs...`;
+      setCurrentStep(step2Text);
       
-      setCurrentStep(`Generating eBay listing description (${listingStyle})...`);
-      const generatedListing = await generateListingContent(partImage.base64, partNumber, compatibilityHtml, listingStyle);
+      const dataHtml = await getProductData(extractedId, scanType);
+      
+      setCurrentStep(`Generating ${platform} listing...`);
+      
+      const generatedListing = await generateListingContent(
+          partImage.base64, 
+          extractedId, 
+          dataHtml, 
+          listingStyle, 
+          platform,
+          scanType,
+          { price, location, condition }
+      );
 
       setListing(generatedListing);
-      setCompatibilityData(compatibilityHtml);
+      setSupplementalData(dataHtml);
 
-      // Auto-save to history
       saveToHistory({
         id: crypto.randomUUID(),
         timestamp: Date.now(),
-        partNumber: partNumber,
+        partNumber: extractedId,
         title: generatedListing.title,
         description: generatedListing.description,
-        compatibilityHtml: compatibilityHtml
+        compatibilityHtml: dataHtml,
+        platform: platform
       });
 
     } catch (err: unknown) {
@@ -200,25 +234,25 @@ export default function App() {
     }
   };
 
-  const handleLookupCompatibility = async () => {
-    if (!manualPartNumber.trim()) {
-      setCompatibilityError('Please enter a part number.');
+  const handleManualLookup = async () => {
+    if (!manualIdentifier.trim()) {
+      setLookupError('Please enter an ID or Part Number.');
       return;
     }
-    setIsCompatibilityLoading(true);
-    setCompatibilityError(null);
-    setCompatibilityData(null);
+    setIsLookupLoading(true);
+    setLookupError(null);
+    setSupplementalData(null);
     setListing(null);
     setError(null);
 
     try {
-      const data = await getCompatibilityData(manualPartNumber);
-      setCompatibilityData(data);
+      const data = await getProductData(manualIdentifier, scanType);
+      setSupplementalData(data);
     } catch (err: unknown) {
       const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setCompatibilityError(`Lookup failed: ${errorMessage}`);
+      setLookupError(`Lookup failed: ${errorMessage}`);
     } finally {
-      setIsCompatibilityLoading(false);
+      setIsLookupLoading(false);
     }
   };
 
@@ -238,11 +272,24 @@ export default function App() {
             <div className="flex items-center justify-between h-16">
                 <div className="flex items-center gap-3">
                     <Logo className="h-10 w-10" />
-                    <span className="text-xl font-bold tracking-tight text-white">
-                        Rapid<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Listing</span>Tool.com
+                    <span className="text-xl font-bold tracking-tight text-white hidden sm:block">
+                        Rapid<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Listing</span>Tool
+                    </span>
+                    <span className="text-xl font-bold tracking-tight text-white sm:hidden">
+                        Rapid<span className="text-teal-400">List</span>
                     </span>
                 </div>
                 <div className="flex items-center gap-4">
+                    <button 
+                        onClick={() => setIsSettingsOpen(true)}
+                        className="text-gray-300 hover:text-white transition-colors"
+                        title="Business Settings"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
                     <button 
                         onClick={() => setIsNotepadOpen(true)}
                         className="text-gray-300 hover:text-white text-sm font-medium transition-colors flex items-center gap-2"
@@ -259,7 +306,7 @@ export default function App() {
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-fuchsia-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>
-                        <span className="hidden sm:inline">History ({savedScans.length})</span>
+                        <span className="hidden sm:inline">History</span>
                     </button>
                 </div>
             </div>
@@ -268,29 +315,71 @@ export default function App() {
 
       <div className="w-full max-w-5xl mx-auto flex flex-col flex-grow px-4 py-8 z-10">
         
-        <header className="text-center mb-10">
-          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-4">
-            Automate Your <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 via-purple-500 to-fuchsia-500 animate-pulse">Auto Parts</span>
+        <header className="text-center mb-8">
+          <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight text-white mb-4">
+            Universal <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 via-purple-500 to-fuchsia-500">Reseller Tool</span>
           </h1>
-          <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-            Upload photos, extract ACES/PIES data, and generate professional eBay HTML listings in seconds.
+          <p className="text-base text-gray-400 max-w-xl mx-auto">
+            Generate professional listings for Auto Parts OR Everyday Items using AI.
+            <br/>
+            <span className="text-xs text-gray-500">Current Profile: {userProfile.businessName}</span>
           </p>
         </header>
 
+        {/* Scan Type Toggle */}
+        <div className="flex justify-center mb-8">
+            <div className="bg-gray-800 p-1.5 rounded-xl inline-flex shadow-lg border border-gray-700">
+                <button
+                    onClick={() => setScanType('auto-part')}
+                    className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
+                        scanType === 'auto-part'
+                            ? 'bg-fuchsia-600 text-white shadow-lg shadow-fuchsia-900/20'
+                            : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path d="M8 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zM15 16.5a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
+                        <path d="M3 4a1 1 0 00-1 1v10a1 1 0 001 1h1.05a2.5 2.5 0 014.9 0H10a1 1 0 001-1V5a1 1 0 00-1-1H3zM14 7a1 1 0 00-1 1v6.05A2.5 2.5 0 0115.95 16H17a1 1 0 001-1v-5a1 1 0 00-.293-.707l-2-2A1 1 0 0015 7h-1z" />
+                    </svg>
+                    Auto Part Mode
+                </button>
+                <button
+                    onClick={() => setScanType('general-item')}
+                    className={`px-6 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-all ${
+                        scanType === 'general-item'
+                            ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-900/20'
+                            : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M3 4a1 1 0 011-1h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm2 2a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V7a1 1 0 00-1-1H5z" clipRule="evenodd" />
+                        <path d="M7 8a1 1 0 011-1h4a1 1 0 110 2H8a1 1 0 01-1-1z" />
+                    </svg>
+                    General Item Mode
+                </button>
+            </div>
+        </div>
+
         <main className="flex-grow w-full">
-          <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50 mb-12">
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 mb-6">
+          <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50 mb-12 relative">
+             {/* Indicator for current mode */}
+             <div className={`absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest shadow-xl border ${
+                 scanType === 'auto-part' ? 'bg-fuchsia-900 text-fuchsia-200 border-fuchsia-700' : 'bg-cyan-900 text-cyan-200 border-cyan-700'
+             }`}>
+                 {scanType === 'auto-part' ? 'Auto Parts Scanner' : 'Barcode & Product Scanner'}
+             </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 mb-6 mt-4">
               <ImageUploader 
                 id="part-image" 
-                label="Step 1: Part Photo" 
+                label={scanType === 'auto-part' ? "Step 1: Part Photo" : "Step 1: Item Photo"}
                 onImageUpload={(file) => handleImageUpload(file, 'part')} 
                 imagePreviewUrl={partImage ? URL.createObjectURL(partImage.file) : null}
                 onClearImage={() => setPartImage(null)}
               />
               <ImageUploader 
                 id="serial-image" 
-                label="Step 2: Serial # Photo" 
+                label={scanType === 'auto-part' ? "Step 2: Serial/Part # Photo" : "Step 2: Barcode / UPC Photo"}
                 onImageUpload={(file) => handleImageUpload(file, 'serial')} 
                 imagePreviewUrl={serialImage ? URL.createObjectURL(serialImage.file) : null}
                 onClearImage={() => setSerialImage(null)}
@@ -305,27 +394,88 @@ export default function App() {
 
             {isLoading ? (
               <div className="flex flex-col items-center justify-center py-8 space-y-4">
-                <Spinner className="h-12 w-12 text-fuchsia-500" />
+                <Spinner className={`h-12 w-12 ${scanType === 'auto-part' ? 'text-fuchsia-500' : 'text-cyan-500'}`} />
                 <p className="text-lg font-medium text-gray-300 animate-pulse">{currentStep}</p>
               </div>
             ) : (
               <div className="space-y-4">
-                  {/* Settings Row */}
-                  <div className="flex items-center justify-end gap-4 mb-2">
-                    <label htmlFor="listing-style" className="text-sm font-medium text-gray-400">Template:</label>
-                    <select
-                        id="listing-style"
-                        value={listingStyle}
-                        onChange={(e) => setListingStyle(e.target.value as ListingStyle)}
-                        className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
-                    >
-                        <option value="professional">Professional (Standard)</option>
-                        <option value="minimalist">Minimalist (Mobile Friendly)</option>
-                        <option value="table-layout">Table Layout (Structured)</option>
-                        <option value="bold-classic">Bold Classic (High Contrast)</option>
-                        <option value="modern-card">Modern Card (Boxed Layout)</option>
-                    </select>
+                  {/* Platform Selector */}
+                  <div className="flex justify-center mb-6">
+                      <div className="bg-gray-800 p-1 rounded-lg inline-flex shadow-lg border border-gray-700">
+                        {['ebay', 'facebook', 'craigslist'].map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => setPlatform(p as Platform)}
+                              className={`px-6 py-2 rounded-md text-sm font-medium transition-all capitalize ${
+                                platform === p
+                                  ? 'bg-blue-600 text-white shadow-md'
+                                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                              }`}
+                            >
+                              {p} {p === 'ebay' && '(HTML)'}
+                            </button>
+                        ))}
+                      </div>
                   </div>
+
+                  {/* Settings Row */}
+                  {platform === 'ebay' && (
+                      <div className="flex items-center justify-end gap-4 mb-2 animate-fade-in">
+                        <label htmlFor="listing-style" className="text-sm font-medium text-gray-400">Template:</label>
+                        <select
+                            id="listing-style"
+                            value={listingStyle}
+                            onChange={(e) => setListingStyle(e.target.value as ListingStyle)}
+                            className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
+                        >
+                            <option value="professional">Professional</option>
+                            <option value="minimalist">Minimalist</option>
+                            <option value="table-layout">Table Layout</option>
+                            <option value="bold-classic">Bold Classic</option>
+                            <option value="modern-card">Modern Card</option>
+                        </select>
+                      </div>
+                  )}
+
+                  {/* Additional Fields */}
+                  {platform !== 'ebay' && (
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 animate-fade-in bg-gray-800/50 p-4 rounded-xl border border-gray-700">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-400 mb-1">Price</label>
+                            <input 
+                                type="text" 
+                                value={price} 
+                                onChange={(e) => setPrice(e.target.value)} 
+                                placeholder="$0.00" 
+                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
+                            <input 
+                                type="text" 
+                                value={location} 
+                                onChange={(e) => setLocation(e.target.value)} 
+                                placeholder="City, Zip" 
+                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-400 mb-1">Condition</label>
+                            <select 
+                                value={condition} 
+                                onChange={(e) => setCondition(e.target.value)} 
+                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            >
+                                <option>Used - Like New</option>
+                                <option>Used - Good</option>
+                                <option>Used - Fair</option>
+                                <option>For Parts / Salvage</option>
+                                <option>As Is</option>
+                            </select>
+                        </div>
+                    </div>
+                  )}
                   
                   <div className="flex gap-3">
                     <button
@@ -337,13 +487,15 @@ export default function App() {
                     <button
                         onClick={handleGenerateListing}
                         disabled={isGenerateButtonDisabled}
-                        className={`flex-[2] py-3 px-6 rounded-lg font-bold text-lg transition-all duration-200 transform hover:scale-[1.02] active:scale-95 shadow-lg shadow-blue-900/20
+                        className={`flex-[2] py-3 px-6 rounded-lg font-bold text-lg transition-all duration-200 transform hover:scale-[1.02] active:scale-95 shadow-lg
                         ${isGenerateButtonDisabled 
                             ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
-                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white'
+                            : scanType === 'auto-part' 
+                                ? 'bg-gradient-to-r from-fuchsia-600 to-purple-600 hover:from-fuchsia-500 hover:to-purple-500 text-white shadow-fuchsia-900/20'
+                                : 'bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-cyan-900/20'
                         }`}
                     >
-                        GENERATE LISTING
+                        {scanType === 'auto-part' ? 'GENERATE AUTO LISTING' : 'GENERATE PRODUCT LISTING'}
                     </button>
                   </div>
               </div>
@@ -352,44 +504,56 @@ export default function App() {
 
           {listing && (
              <div className="mb-12 animate-fade-in-up">
-               <ResultCard title={listing.title} description={listing.description} />
+               <ResultCard 
+                 title={listing.title} 
+                 description={listing.description} 
+                 platform={platform} 
+                 scanType={scanType}
+                 userProfile={userProfile}
+               />
              </div>
           )}
 
           <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50">
-             <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+             <h2 className={`text-2xl font-bold text-white mb-4 flex items-center gap-2`}>
+                <svg xmlns="http://www.w3.org/2000/svg" className={`h-6 w-6 ${scanType === 'auto-part' ? 'text-green-400' : 'text-yellow-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                 </svg>
-                Manual Fitment Check
+                {scanType === 'auto-part' ? 'Manual Fitment Check' : 'Manual Product Lookup'}
              </h2>
              <p className="text-gray-400 mb-4 text-sm">
-                Enter a part number manually to check vehicle compatibility without generating a full listing.
+                {scanType === 'auto-part' 
+                    ? "Enter a part number manually to check vehicle compatibility without generating a full listing."
+                    : "Enter a UPC, Barcode, or Model Number manually to check product specs."}
              </p>
              <div className="flex flex-col md:flex-row gap-4">
                 <input 
                   type="text" 
-                  value={manualPartNumber}
-                  onChange={(e) => setManualPartNumber(e.target.value)}
-                  placeholder="Enter Part Number (e.g. 89661-02K30)"
+                  value={manualIdentifier}
+                  onChange={(e) => setManualIdentifier(e.target.value)}
+                  placeholder={scanType === 'auto-part' ? "e.g. 89661-02K30" : "e.g. 885909950805 or KD-55X85J"}
                   className="flex-grow bg-gray-900 border border-gray-700 text-white px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
                 />
                 <button 
-                  onClick={handleLookupCompatibility}
-                  disabled={isCompatibilityLoading}
+                  onClick={handleManualLookup}
+                  disabled={isLookupLoading}
                   className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors whitespace-nowrap border border-gray-600"
                 >
-                  {isCompatibilityLoading ? 'Searching...' : 'Check Fitment'}
+                  {isLookupLoading ? 'Searching...' : 'Lookup'}
                 </button>
              </div>
-             {compatibilityError && (
+             {lookupError && (
                 <div className="mt-4 p-3 bg-red-900/20 border border-red-800 text-red-300 rounded-md text-sm">
-                    {compatibilityError}
+                    {lookupError}
                 </div>
              )}
-             {compatibilityData && (
+             {supplementalData && (
                 <div className="mt-6 animate-fade-in">
-                    <CompatibilityCard partNumber={manualPartNumber} compatibilityHtml={compatibilityData} />
+                    <CompatibilityCard 
+                        partNumber={manualIdentifier} 
+                        compatibilityHtml={supplementalData} 
+                        titleOverride={scanType === 'general-item' ? 'Product Specifications' : undefined}
+                    />
                 </div>
              )}
           </div>
@@ -398,13 +562,16 @@ export default function App() {
 
         <footer className="w-full text-center py-8 mt-8 border-t border-gray-800">
             <p className="text-gray-500 text-sm">
-                &copy; {new Date().getFullYear()} RapidListingTool.com. All rights reserved.
+                &copy; {new Date().getFullYear()} {userProfile.businessName}. Powered by RapidListingTool.com.
             </p>
             <button 
-                onClick={() => setIsReplitModalOpen(true)} 
-                className="mt-2 text-xs text-gray-700 hover:text-gray-500 transition-colors"
+                onClick={() => setIsFirebaseModalOpen(true)} 
+                className="mt-2 text-xs text-gray-700 hover:text-gray-500 transition-colors flex items-center justify-center gap-1 mx-auto"
             >
-                Download Source Code
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Deploy to Firebase
             </button>
         </footer>
       </div>
@@ -417,8 +584,9 @@ export default function App() {
         drafts={savedDrafts}
         onLoadScan={loadScan} 
         onDeleteScan={deleteScan} 
-        onLoadDraft={loadDraft}
-        onDeleteDraft={deleteDraft}
+        onLoadDraft={loadDraft} 
+        onDeleteDraft={deleteDraft} 
+        userProfile={userProfile}
       />
       
       <NotepadSidebar 
@@ -427,7 +595,15 @@ export default function App() {
         currentListing={listing} 
       />
 
-      {isReplitModalOpen && <ReplitSetupModal onClose={() => setIsReplitModalOpen(false)} />}
+      {isFirebaseModalOpen && <FirebaseSetupModal onClose={() => setIsFirebaseModalOpen(false)} />}
+      
+      {isSettingsOpen && (
+        <SettingsModal 
+            onClose={() => setIsSettingsOpen(false)} 
+            currentProfile={userProfile} 
+            onSave={saveProfile} 
+        />
+      )}
     </div>
   );
 }
