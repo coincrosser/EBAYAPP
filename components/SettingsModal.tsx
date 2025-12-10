@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 export interface UserProfile {
   businessName: string;
+  headerTitle: string; // New field for App Header
   location: string;
   shippingPolicy: string;
   returnPolicy: string;
@@ -11,6 +12,7 @@ export interface UserProfile {
 
 export const DEFAULT_PROFILE: UserProfile = {
   businessName: "ChrisJayden",
+  headerTitle: "RapidListingTool.com",
   location: "Oklahoma City",
   shippingPolicy: "The buyer is responsible for all shipping costs associated with this item.",
   returnPolicy: "We stand behind the accuracy of our listings. If you receive an item that is not as described, returns are accepted within 15 days of receipt.",
@@ -25,7 +27,11 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, currentProfile }) => {
-  const [profile, setProfile] = useState<UserProfile>(currentProfile);
+  // Ensure headerTitle exists if migrating from an older profile version
+  const [profile, setProfile] = useState<UserProfile>({
+    ...DEFAULT_PROFILE,
+    ...currentProfile
+  });
 
   const handleChange = (field: keyof UserProfile, value: string) => {
     setProfile(prev => ({ ...prev, [field]: value }));
@@ -63,12 +69,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
 
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-6">
             <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-sm text-blue-200">
-                This information will be automatically appended to the bottom of your listings and CSV exports.
+                Customize your branding here. This info is used in your listings and the app header.
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Business Name</label>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Business Name (for Listings)</label>
                     <input 
                         type="text" 
                         value={profile.businessName}
@@ -77,7 +83,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                         placeholder="e.g. ChrisJayden"
                     />
                 </div>
-                <div>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">App Header / Company Name</label>
+                    <input 
+                        type="text" 
+                        value={profile.headerTitle}
+                        onChange={(e) => handleChange('headerTitle', e.target.value)}
+                        className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g. My Company Tool"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Replaces "RapidListingTool.com" in top bar</p>
+                </div>
+                <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
                     <input 
                         type="text" 

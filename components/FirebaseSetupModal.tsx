@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 
 // This component provides the necessary files to deploy to Firebase
-// We update the files content to reflect the latest changes (Scan Type, Barcode logic, Settings)
 const fileContents = {
   '.firebaserc': `{
   "projects": {
@@ -63,305 +62,43 @@ export default defineConfig(({ mode }) => {
     }
   }
 })`,
-  '.env.local': `API_KEY=your_api_key_here`,
-  'src/services/geminiService.ts': `import { GoogleGenAI, Type } from "@google/genai";
+  '.env.local': `API_KEY=your_actual_api_key_here`,
+  'README.md': `# RapidListingTool Deployment Guide
 
-const API_KEY = process.env.API_KEY;
-if (!API_KEY) {
-  throw new Error("API_KEY environment variable not set");
-}
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+## Firebase Hosting (CLI Method)
 
-export type ListingStyle = 'professional' | 'minimalist' | 'table-layout' | 'bold-classic' | 'modern-card';
-export type Platform = 'ebay' | 'facebook' | 'craigslist';
-export type ScanType = 'auto-part' | 'general-item';
+1. **Install Node.js** if you haven't already.
+2. **Install Firebase CLI:**
+   \`npm install -g firebase-tools\`
+3. **Login to Firebase:**
+   \`firebase login\`
+4. **Initialize Project:**
+   \`firebase init hosting\`
+   - Select "Use an existing project" -> **rapidlistingtool**
+   - **Public directory:** \`dist\`
+   - **Configure as a single-page app?** \`Yes\`
+   - **Set up automatic builds and deploys with GitHub?** \`No\` (or Yes for CI/CD)
+5. **Install Dependencies:**
+   \`npm install\`
+6. **Build the Project:**
+   \`npm run build\`
+7. **Deploy:**
+   \`firebase deploy\`
 
-export interface ListingOptions {
-    price?: string;
-    location?: string;
-    condition?: string;
-}
+## Deployment Without Command Line
 
-const imageDataUrlToGenerativePart = (dataUrl: string) => {
-  const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
-  if (!match) {
-    console.warn("Input was not a valid data URL. Falling back to image/jpeg.");
-    return {
-      inlineData: {
-        data: dataUrl,
-        mimeType: 'image/jpeg',
-      },
-    };
-  }
+If you cannot use the command line, the recommended path is:
 
-  return {
-    inlineData: {
-      data: match[2],
-      mimeType: match[1],
-    },
-  };
-};
-
-export async function extractIdentifierFromImage(imageDataUrl: string, type: ScanType): Promise<string> {
-  const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
-  
-  const autoPrompt = \`
-    Analyze this image of a car part.
-    Perform Optical Character Recognition (OCR) to identify and extract ONLY the most prominent part number or serial number.
-    Return ONLY the alphanumeric string, with no extra text.
-  \`;
-
-  const generalPrompt = \`
-    Analyze this image of a product.
-    Look specifically for a BARCODE (UPC, EAN), ISBN, or a printed Model Number.
-    Perform OCR to read the numbers below the barcode or the text on the label.
-    Return ONLY the numeric UPC/EAN code or alphanumeric Model Number.
-    If multiple are visible, prefer the UPC (12 digits) or EAN (13 digits).
-    Do not add labels like "UPC:" or "Model:". Just return the code.
-  \`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { parts: [imagePart, { text: type === 'auto-part' ? autoPrompt : generalPrompt }] },
-    });
-    const text = response.text.trim();
-    if (!text) {
-        throw new Error("The AI returned an empty response. Please try a clearer image of the barcode or part number.");
-    }
-    return text;
-  } catch (error) {
-    console.error("Error extracting identifier:", error);
-    throw new Error(\`Failed to extract data from image. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
-  }
-}
-
-export async function getProductData(identifier: string, type: ScanType): Promise<string> {
-  const autoPrompt = \`
-    You are an expert on automotive parts and ACES/PIES compatibility data.
-    For the given auto part number "\${identifier}", perform a search to find its vehicle compatibility.
-    Your response must be ONLY a well-structured HTML table with a header row (<th>). 
-    Ensure the table is formatted for easy reading and copying into eBay listings.
-    Do not include any other text, explanation, or markdown formatting like \\\`\\\`\\\`.
-    The table should have columns for: "Make", "Model", "Year Range", "Engine/Trim", and "Notes".
-    If you cannot find any data, return: <p>No compatibility information found for part number \${identifier}.</p>
-  \`;
-
-  const generalPrompt = \`
-    You are an expert product researcher.
-    For the given product identifier (UPC, Barcode, or Model Name): "\${identifier}", perform a search to find its technical specifications.
-    Your response must be ONLY a well-structured HTML table with a header row (<th>).
-    Ensure the table is formatted for easy reading.
-    Do not include any other text.
-    The table should have columns for: "Brand", "Model/MPN", "Category", "Key Features", and "Dimensions/Weight" (if available).
-    If you cannot find specific data, return: <p>No specific product details found for ID \${identifier}.</p>
-  \`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: type === 'auto-part' ? autoPrompt : generalPrompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
-    });
-
-    const text = response.text.trim().replace(/^\\\`\\\`\\\`html\\s*|\\\`\\\`\\\`$/g, '');
-    if (!text) {
-        throw new Error("The AI returned an empty response for data lookup.");
-    }
-    return text;
-  } catch (error) {
-    console.error("Error fetching product data:", error);
-    throw new Error(\`Failed to look up data. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
-  }
-}
-
-const getStyleInstruction = (style: ListingStyle, identifier: string, supplementalHtml: string, type: ScanType): string => {
-    // Shared instructions
-    const commonInstructions = \`
-        *   Create a concise, SEO-friendly eBay title.
-        *   Include: Brand, Model, Key Features, and ID "\${identifier}".
-    \`;
-
-    // Branding text logic is handled in ResultCard now, but we guide the structure here.
-    const isAuto = type === 'auto-part';
-    const specTitle = isAuto ? "Vehicle Fitment" : "Product Specifications";
-    const condTitle = isAuto ? "Used OEM" : "Pre-Owned / Used";
-
-    if (style === 'minimalist') {
-        return \`
-            \${commonInstructions}
-            **Description Generation (Minimalist HTML):**
-            *   Clean, mobile-friendly, bullet points.
-            *   Structure:
-                1.  <h2>Title</h2>
-                2.  <h3>Quick Specs</h3>
-                    <ul>
-                        <li><strong>ID:</strong> \${identifier}</li>
-                        <li><strong>Condition:</strong> \${condTitle} (See Photos)</li>
-                    </ul>
-                3.  <h3>\${specTitle}</h3>
-                    \${supplementalHtml}
-        \`;
-    } else if (style === 'table-layout') {
-        return \`
-            \${commonInstructions}
-            **Description Generation (Table Layout HTML):**
-            *   Structured, technical look.
-            *   Structure:
-                1.  <h2>Title</h2>
-                2.  HTML Table (width:100%):
-                    *   <strong>ID/SKU</strong> | \${identifier}
-                    *   <strong>Condition</strong> | \${condTitle}
-                3.  <h3>Detailed Description</h3>
-                    <p>[Analyze image and describe item]</p>
-                4.  <h3>\${specTitle}</h3>
-                    \${supplementalHtml}
-        \`;
-    } else if (style === 'bold-classic') {
-        return \`
-            \${commonInstructions}
-            **Description Generation (Bold Classic HTML):**
-            *   High-contrast, centered, horizontal rules.
-            *   Structure:
-                1.  <h1 style="text-align: center; border-bottom: 2px solid #000;">Title</h1>
-                2.  <div style="text-align: center; font-weight: bold;">ID: \${identifier}</div>
-                3.  <hr />
-                4.  <h3>Item Description</h3>
-                    <p>[Analyze image and describe item]</p>
-                5.  <hr />
-                6.  <h3>\${specTitle}</h3>
-                    \${supplementalHtml}
-        \`;
-    } else if (style === 'modern-card') {
-        return \`
-            \${commonInstructions}
-            **Description Generation (Modern Card HTML):**
-            *   Boxed layout, gray headers.
-            *   Structure:
-                1.  <div style="background-color: #f3f4f6; padding: 20px;">
-                        <h2>Title</h2>
-                        <p>ID: <strong>\${identifier}</strong> | Condition: <strong>\${condTitle}</strong></p>
-                    </div>
-                2.  <div style="padding: 20px;">
-                        <h3>Details</h3>
-                        <p>[Analyze image and describe item]</p>
-                        <h3>\${specTitle}</h3>
-                        \${supplementalHtml}
-                    </div>
-        \`;
-    } else {
-        // Professional (Default)
-        return \`
-            \${commonInstructions}
-            **Description Generation (Professional HTML):**
-            *   Standard standard listing format.
-            *   Structure:
-                a. **Header:** <h2>Title</h2>, <p><strong>ID:</strong> \${identifier}</p>.
-                b. **Details:** <h3>Product Details</h3>. Analyze image for condition.
-                c. **Specs:** <h3>\${specTitle}</h3> \${supplementalHtml}
-        \`;
-    }
-};
-
-export async function generateListingContent(
-  partImageDataUrl: string,
-  identifier: string,
-  supplementalHtml: string,
-  style: ListingStyle = 'professional',
-  platform: Platform = 'ebay',
-  type: ScanType = 'auto-part',
-  options?: ListingOptions
-): Promise<{ title: string; description: string }> {
-  const imagePart = imageDataUrlToGenerativePart(partImageDataUrl);
-  
-  let instructions = '';
-  const specLabel = type === 'auto-part' ? 'Vehicle Fitment' : 'Product Specs';
-
-  // Handle condition formatting for FB/Craigslist
-  let conditionText = options?.condition || (type === 'auto-part' ? 'Used OEM' : 'Used');
-  if ((platform === 'facebook' || platform === 'craigslist') && conditionText === 'Used - Fair') {
-      conditionText += ' (As Is)';
-  }
-
-  if (platform === 'facebook') {
-    instructions = \`
-        *   Create a catchy, engaging title for Facebook Marketplace (use 1-2 emojis).
-        *   **Description Generation (Facebook - Plain Text):**
-        *   Use emojis (🔥, 📦, ✅). No HTML.
-        *   Structure:
-            1.  **Header:** Item Name & ID
-            2.  **Price:** \${options?.price || '[Enter Price]'}
-            3.  **Location:** \${options?.location || '[Enter Location]'}
-            4.  **Condition:** \${conditionText}
-            5.  **Description:** 2-3 short sentences.
-            6.  **\${specLabel}:** Convert the HTML table below into a text list.
-            7.  **Data:** \${supplementalHtml}
-    \`;
-  } else if (platform === 'craigslist') {
-    instructions = \`
-        *   Create a clear, professional title for Craigslist.
-        *   **Description Generation (Craigslist - Plain Text):**
-        *   Clean text. No HTML.
-        *   Structure:
-            1.  **Item:** Name & ID \${identifier}
-            2.  **Price:** \${options?.price || '[Enter Price]'}
-            3.  **Location:** \${options?.location || '[Enter Location]'}
-            4.  **Condition:** \${conditionText}
-            5.  **Description:** Detailed description.
-            6.  **\${specLabel}:** Convert HTML table to text list.
-            7.  **Data:** \${supplementalHtml}
-    \`;
-  } else {
-    // eBay (HTML)
-    instructions = getStyleInstruction(style, identifier, supplementalHtml, type);
-  }
-
-  const prompt = \`
-    You are an expert reseller.
-    Based on the provided identifier "\${identifier}" and the image of the item.
-    Item Type: \${type === 'auto-part' ? 'Automotive Part' : 'General Merchandise (Electronics, Home, etc.)'}.
-    
-    \${instructions}
-
-    Your response MUST be a single, valid JSON object with two keys: "title" and "description".
-  \`;
-
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { parts: [imagePart, { text: prompt }] },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-                title: { type: Type.STRING },
-                description: { type: Type.STRING },
-            },
-            required: ['title', 'description'],
-        },
-      },
-    });
-
-    const jsonText = response.text.trim();
-    if (!jsonText) {
-      throw new Error("The AI returned an empty response.");
-    }
-    return JSON.parse(jsonText);
-  } catch (error) {
-    console.error("Error generating listing:", error);
-    if (error instanceof SyntaxError) {
-        throw new Error("Failed to generate listing due to invalid AI response format. Try again.");
-    }
-    throw new Error(\`Failed to generate listing. \${error instanceof Error ? error.message : "An unknown AI error occurred."}\`);
-  }
-}`,
-  'src/components/SettingsModal.tsx': `import React, { useState, useEffect } from 'react';
+1. **Create a GitHub Repository** and upload these files.
+2. **Connect to a Host:** Use a service like **StackBlitz**, **CodeSandbox**, or **Netlify**.
+   - These services can import from GitHub and handle the build process automatically.
+   - For Firebase specifically, you can configure **GitHub Actions** via the Firebase Console to auto-deploy whenever you push changes to GitHub.
+`,
+  'components/SettingsModal.tsx': `import React, { useState, useEffect } from 'react';
 
 export interface UserProfile {
   businessName: string;
+  headerTitle: string; // New field for App Header
   location: string;
   shippingPolicy: string;
   returnPolicy: string;
@@ -371,6 +108,7 @@ export interface UserProfile {
 
 export const DEFAULT_PROFILE: UserProfile = {
   businessName: "ChrisJayden",
+  headerTitle: "RapidListingTool.com",
   location: "Oklahoma City",
   shippingPolicy: "The buyer is responsible for all shipping costs associated with this item.",
   returnPolicy: "We stand behind the accuracy of our listings. If you receive an item that is not as described, returns are accepted within 15 days of receipt.",
@@ -385,7 +123,11 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, currentProfile }) => {
-  const [profile, setProfile] = useState<UserProfile>(currentProfile);
+  // Ensure headerTitle exists if migrating from an older profile version
+  const [profile, setProfile] = useState<UserProfile>({
+    ...DEFAULT_PROFILE,
+    ...currentProfile
+  });
 
   const handleChange = (field: keyof UserProfile, value: string) => {
     setProfile(prev => ({ ...prev, [field]: value }));
@@ -423,12 +165,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
 
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-6">
             <div className="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-sm text-blue-200">
-                This information will be automatically appended to the bottom of your listings and CSV exports.
+                Customize your branding here. This info is used in your listings and the app header.
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-400 mb-1">Business Name</label>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">Business Name (for Listings)</label>
                     <input 
                         type="text" 
                         value={profile.businessName}
@@ -437,7 +179,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                         placeholder="e.g. ChrisJayden"
                     />
                 </div>
-                <div>
+                 <div>
+                    <label className="block text-sm font-medium text-gray-400 mb-1">App Header / Company Name</label>
+                    <input 
+                        type="text" 
+                        value={profile.headerTitle}
+                        onChange={(e) => handleChange('headerTitle', e.target.value)}
+                        className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"
+                        placeholder="e.g. My Company Tool"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">Replaces "RapidListingTool.com" in top bar</p>
+                </div>
+                <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
                     <input 
                         type="text" 
@@ -520,44 +273,384 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
       </div>
     </div>
   );
-}`,
-  'src/main.tsx': `import React from 'react'
-import ReactDOM from 'react-dom/client'
-import App from './App.tsx'
-import './index.css'
+};`,
+  'components/ImageUploader.tsx': `import React, { useState, useEffect } from 'react';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
-)`,
-  'README.md': `# RapidListingTool Deployment Guide
+interface ImageUploaderProps {
+  id: string;
+  label: string;
+  onImageUpload: (file: File) => void;
+  imagePreviewUrl: string | null;
+  onClearImage: () => void;
+}
 
-## Firebase Hosting
+export const ImageUploader: React.FC<ImageUploaderProps> = ({
+  id,
+  label,
+  onImageUpload,
+  imagePreviewUrl,
+  onClearImage,
+}) => {
+  const [isLoaded, setIsLoaded] = useState(false);
 
-1. **Install Node.js** if you haven't already.
-2. **Install Firebase CLI:**
-   \`npm install -g firebase-tools\`
-3. **Login to Firebase:**
-   \`firebase login\`
-4. **Initialize Project:**
-   \`firebase init hosting\`
-   - Select "Use an existing project" or "Create a new project".
-   - **Public directory:** \`dist\`
-   - **Configure as a single-page app?** \`Yes\`
-   - **Set up automatic builds and deploys with GitHub?** \`No\` (optional)
-   - **File Overwrites:** It is okay to overwrite index.html, but do NOT overwrite dist/index.html if manual.
-5. **Install Dependencies:**
-   \`npm install\`
-6. **Build the Project:**
-   \`npm run build\`
-7. **Deploy:**
-   \`firebase deploy\`
+  useEffect(() => {
+    // Reset loading state when the image URL changes
+    if (imagePreviewUrl) {
+      setIsLoaded(false);
+    }
+  }, [imagePreviewUrl]);
 
-## Environment Variables
-Create a \`.env\` file in the root directory and add your Google Gemini API Key:
-\`API_KEY=your_actual_api_key_here\`
-`
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files && event.target.files[0]) {
+      onImageUpload(event.target.files[0]);
+    }
+    // Reset file input to allow re-uploading the same file after clearing.
+    event.target.value = '';
+  };
+
+  const ImageIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-12 w-12 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  );
+
+  return (
+    <div className="flex flex-col items-center justify-center w-full">
+      <p id={\`\${id}-label\`} className="text-lg font-semibold text-gray-300 mb-2">{label}</p>
+      <label 
+        htmlFor={id}
+        aria-labelledby={\`\${id}-label\`}
+        className="relative w-full h-48 md:h-64 border-2 border-dashed border-gray-600 rounded-lg flex flex-col justify-center items-center cursor-pointer hover:border-blue-400 transition-colors duration-300 bg-gray-800 overflow-hidden group"
+      >
+        {imagePreviewUrl ? (
+          <>
+            {/* Loading Skeleton/Placeholder */}
+            {!isLoaded && (
+               <div className="absolute inset-0 flex items-center justify-center bg-gray-800 z-10">
+                  <div className="w-full h-full animate-pulse bg-gray-700/50 flex items-center justify-center">
+                    <svg className="animate-spin h-8 w-8 text-gray-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  </div>
+               </div>
+            )}
+
+            <img 
+              src={imagePreviewUrl} 
+              alt="Preview" 
+              onLoad={() => setIsLoaded(true)}
+              className={\`w-full h-full object-contain rounded-lg p-1 transition-all duration-700 ease-out transform \${
+                  isLoaded ? 'opacity-100 blur-0 scale-100' : 'opacity-0 blur-md scale-95'
+              }\`} 
+            />
+            
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                onClearImage();
+              }}
+              className="absolute top-2 right-2 bg-red-600 text-white rounded-full p-1.5 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-red-500 transition-transform transform hover:scale-110 z-20 shadow-lg"
+              aria-label="Remove image"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </>
+        ) : (
+          <div className="text-center transform transition-transform duration-300 group-hover:scale-105">
+            <ImageIcon />
+            <p className="mt-2 text-sm text-gray-400">
+              <span className="font-semibold text-blue-400">Tap to upload</span> or drag and drop
+            </p>
+            <p className="text-xs text-gray-500 mt-1">PNG, JPG, GIF up to 10MB</p>
+          </div>
+        )}
+        <input 
+          id={id} 
+          name={id} 
+          type="file" 
+          className="sr-only" 
+          accept="image/*" 
+          onChange={handleFileChange} 
+        />
+      </label>
+    </div>
+  );
+};`,
+ 'components/HistorySidebar.tsx': `import React, { useState } from 'react';
+import { downloadEbayCSV } from '../utils/csvExport';
+import { Platform } from '../services/geminiService';
+import { UserProfile } from './SettingsModal';
+
+export interface SavedScan {
+  id: string;
+  timestamp: number;
+  partNumber: string;
+  title: string;
+  description: string;
+  compatibilityHtml: string;
+  platform?: Platform; // New field to track platform type
+}
+
+export interface SavedDraft {
+  id: string;
+  timestamp: number;
+  partImageBase64?: string;
+  serialImageBase64?: string;
+  partNumber?: string;
+}
+
+interface HistorySidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+  scans: SavedScan[];
+  drafts: SavedDraft[];
+  onLoadScan: (scan: SavedScan) => void;
+  onDeleteScan: (id: string) => void;
+  onLoadDraft: (draft: SavedDraft) => void;
+  onDeleteDraft: (id: string) => void;
+  userProfile: UserProfile;
+}
+
+interface HistoryItemProps {
+  scan: SavedScan;
+  onLoad: () => void;
+  onDelete: () => void;
+}
+
+interface DraftItemProps {
+  draft: SavedDraft;
+  onLoad: () => void;
+  onDelete: () => void;
+}
+
+const HistoryItem: React.FC<HistoryItemProps> = ({ scan, onLoad, onDelete }) => {
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
+
+  const handleCopyFitment = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(scan.compatibilityHtml);
+    setCopyStatus('copied');
+    setTimeout(() => setCopyStatus('idle'), 2000);
+  };
+
+  const getPlatformBadge = (p?: Platform) => {
+    if (p === 'facebook') return <span className="ml-2 px-1.5 py-0.5 rounded bg-blue-900/50 text-blue-300 text-[10px] border border-blue-800">FB</span>;
+    if (p === 'craigslist') return <span className="ml-2 px-1.5 py-0.5 rounded bg-purple-900/50 text-purple-300 text-[10px] border border-purple-800">CL</span>;
+    return <span className="ml-2 px-1.5 py-0.5 rounded bg-green-900/50 text-green-300 text-[10px] border border-green-800">eBay</span>;
+  }
+
+  return (
+    <div className="bg-gray-800 rounded-lg p-4 border border-gray-700 hover:border-fuchsia-500/50 transition-colors group relative">
+      <div className="flex justify-between items-start mb-2">
+        <div className="flex items-center">
+             <span className="inline-block px-2 py-1 text-xs font-semibold bg-gray-700 text-fuchsia-300 rounded">
+            {scan.partNumber}
+            </span>
+            {getPlatformBadge(scan.platform)}
+        </div>
+        <span className="text-xs text-gray-500">
+          {new Date(scan.timestamp).toLocaleDateString()}
+        </span>
+      </div>
+      <h3 className="text-sm font-medium text-white line-clamp-2 mb-3">
+        {scan.title}
+      </h3>
+      
+      <div className="grid grid-cols-2 gap-2 mt-2">
+        <button
+          onClick={onLoad}
+          className="bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 px-3 rounded flex items-center justify-center transition-colors"
+        >
+          View Scan
+        </button>
+        <button
+          onClick={handleCopyFitment}
+          className={\`text-xs py-2 px-3 rounded flex items-center justify-center transition-colors border \${
+            copyStatus === 'copied' 
+              ? 'bg-green-900/30 border-green-500 text-green-400' 
+              : 'bg-gray-700 border-transparent hover:bg-gray-600 text-gray-300'
+          }\`}
+        >
+          {copyStatus === 'copied' ? 'Copied!' : 'Copy Fitment'}
+        </button>
+      </div>
+      <button
+        onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+        }}
+        className="absolute top-2 right-2 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+        title="Delete Scan"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+        </svg>
+      </button>
+    </div>
+  );
+};
+
+const DraftItem: React.FC<DraftItemProps> = ({ draft, onLoad, onDelete }) => {
+    // Use the part image or serial image as a thumbnail
+    const thumb = draft.partImageBase64 || draft.serialImageBase64;
+    
+    return (
+      <div className="bg-gray-800 rounded-lg p-3 border border-gray-700 hover:border-cyan-500/50 transition-colors group relative flex gap-3 items-center">
+        <div className="h-16 w-16 bg-gray-900 rounded overflow-hidden flex-shrink-0 border border-gray-600">
+            {thumb ? (
+                <img src={thumb} alt="Draft" className="h-full w-full object-cover" />
+            ) : (
+                <div className="h-full w-full flex items-center justify-center text-gray-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                </div>
+            )}
+        </div>
+        <div className="flex-grow min-w-0">
+            <p className="text-xs text-cyan-400 font-semibold mb-1">
+                {draft.partNumber ? \`Draft: \${draft.partNumber}\` : 'Untitled Draft'}
+            </p>
+            <p className="text-[10px] text-gray-500 mb-2">{new Date(draft.timestamp).toLocaleDateString()} {new Date(draft.timestamp).toLocaleTimeString()}</p>
+            <button 
+                onClick={onLoad}
+                className="text-xs bg-cyan-900/30 hover:bg-cyan-900/50 text-cyan-300 border border-cyan-800/50 px-3 py-1 rounded transition-colors"
+            >
+                Resume
+            </button>
+        </div>
+        <button
+          onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+          }}
+          className="absolute top-2 right-2 text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+          title="Delete Draft"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    );
+};
+
+export const HistorySidebar: React.FC<HistorySidebarProps> = ({
+  isOpen,
+  onClose,
+  scans,
+  drafts,
+  onLoadScan,
+  onDeleteScan,
+  onLoadDraft,
+  onDeleteDraft,
+  userProfile
+}) => {
+  const [activeTab, setActiveTab] = useState<'history' | 'drafts'>('history');
+  
+  const handleExport = () => {
+    downloadEbayCSV(scans, userProfile);
+  };
+
+  return (
+    <div
+      className={\`fixed inset-y-0 right-0 w-full sm:w-96 bg-gray-900 border-l border-gray-800 shadow-2xl transform transition-transform duration-300 ease-in-out z-50 flex flex-col \${
+        isOpen ? 'translate-x-0' : 'translate-x-full'
+      }\`}
+    >
+      <div className="p-4 bg-gray-900/50 backdrop-blur-sm border-b border-gray-800">
+        <div className="flex justify-between items-center mb-4">
+             <h2 className="text-xl font-bold text-white flex items-center">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-fuchsia-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              Activity
+            </h2>
+            <button 
+                onClick={onClose} 
+                className="text-gray-400 hover:text-white transition-colors"
+                title="Close History"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+        </div>
+        <div className="flex bg-gray-800 rounded-lg p-1">
+            <button 
+                onClick={() => setActiveTab('history')}
+                className={\`flex-1 text-sm font-medium py-1.5 rounded-md transition-all \${activeTab === 'history' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'}\`}
+            >
+                History
+            </button>
+            <button 
+                onClick={() => setActiveTab('drafts')}
+                className={\`flex-1 text-sm font-medium py-1.5 rounded-md transition-all \${activeTab === 'drafts' ? 'bg-gray-700 text-white shadow' : 'text-gray-400 hover:text-gray-200'}\`}
+            >
+                Drafts
+            </button>
+        </div>
+      </div>
+
+      <div className="flex-grow overflow-y-auto p-4 space-y-4">
+        {activeTab === 'history' ? (
+            scans.length === 0 ? (
+              <div className="text-center text-gray-500 mt-10">
+                <p className="mb-2">No history yet.</p>
+                <p className="text-sm">Generate a listing to save it here automatically.</p>
+              </div>
+            ) : (
+              scans.map((scan) => (
+                <HistoryItem 
+                    key={scan.id} 
+                    scan={scan} 
+                    onLoad={() => { onLoadScan(scan); onClose(); }} 
+                    onDelete={() => onDeleteScan(scan.id)} 
+                />
+              ))
+            )
+        ) : (
+            drafts.length === 0 ? (
+                <div className="text-center text-gray-500 mt-10">
+                    <p className="mb-2">No saved drafts.</p>
+                    <p className="text-sm">Click "Save Draft" while working to save for later.</p>
+                </div>
+            ) : (
+                drafts.map((draft) => (
+                    <DraftItem 
+                        key={draft.id}
+                        draft={draft}
+                        onLoad={() => { onLoadDraft(draft); }}
+                        onDelete={() => onDeleteDraft(draft.id)}
+                    />
+                ))
+            )
+        )}
+      </div>
+
+      {activeTab === 'history' && scans.length > 0 && (
+        <div className="p-4 border-t border-gray-800 bg-gray-900/95 backdrop-blur-sm">
+            <button 
+                onClick={handleExport}
+                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5"
+                title="Download CSV for eBay Seller Hub"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Export to eBay CSV
+            </button>
+            <p className="text-xs text-gray-500 text-center mt-2">
+                Use via eBay Seller Hub &gt; Reports &gt; Upload
+            </p>
+        </div>
+      )}
+    </div>
+  );
+};`
 };
 
 interface FileContentDisplayerProps {
@@ -607,31 +700,45 @@ export const FirebaseSetupModal: React.FC<{ onClose: () => void }> = ({ onClose 
                         </svg>
                     </button>
                 </header>
-                
-                <div className="flex flex-col md:flex-row h-full overflow-hidden">
-                    {/* Sidebar for Files */}
-                    <div className="w-full md:w-64 bg-gray-900/50 border-r border-gray-700 overflow-y-auto">
-                        <nav className="flex flex-col p-2 space-y-1">
+                <div className="p-6 overflow-y-auto flex-grow">
+                     {/* Instructions */}
+                    <div className="mb-4 bg-yellow-900/30 border border-yellow-700 text-yellow-200 p-3 rounded-lg text-sm flex gap-3">
+                         <div className="mt-0.5">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                            </svg>
+                         </div>
+                        <div>
+                            <p className="font-bold mb-1">Deployment Instructions:</p>
+                            <ol className="list-decimal list-inside space-y-1 text-gray-300">
+                                <li><strong>Download</strong> the files below.</li>
+                                <li><strong>Upload</strong> to a GitHub repository.</li>
+                                <li><strong>Connect</strong> to Firebase Hosting (or Netlify/Vercel) via their UI.</li>
+                            </ol>
+                        </div>
+                    </div>
+                    
+                    {/* Tabs */}
+                    <div className="border-b border-gray-600 sticky top-0 bg-gray-800 z-10 pt-2">
+                        <nav className="flex flex-wrap -mb-px gap-2 pb-2">
                             {Object.keys(fileContents).map(filename => (
                                 <button 
                                     key={filename} 
                                     onClick={() => setActiveTab(filename)} 
-                                    className={`text-left py-2 px-3 rounded-md text-sm font-medium transition-colors flex items-center gap-2 ${activeTab === filename ? 'bg-blue-600 text-white shadow-md' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'}`}
+                                    className={`whitespace-nowrap py-2 px-3 rounded-lg font-medium text-xs transition-colors border ${
+                                        activeTab === filename 
+                                            ? 'bg-blue-600 text-white border-blue-500 shadow-lg' 
+                                            : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600 hover:text-gray-200'
+                                    }`}
                                 >
-                                    <span className="opacity-70">📄</span>
                                     {filename}
                                 </button>
                             ))}
                         </nav>
                     </div>
-
-                    {/* Content Area */}
-                    <div className="flex-1 p-6 overflow-y-auto bg-gray-900">
-                        <div className="mb-4 flex items-center justify-between">
-                            <h3 className="text-lg font-mono text-blue-300">{activeTab}</h3>
-                        </div>
-                        <FileContentDisplayer content={fileContents[activeTab as keyof typeof fileContents]} />
-                    </div>
+                    
+                    {/* Content */}
+                    <FileContentDisplayer content={fileContents[activeTab as keyof typeof fileContents]} />
                 </div>
             </div>
         </div>

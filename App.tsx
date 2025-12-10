@@ -69,7 +69,8 @@ export default function App() {
       }
       const storedProfile = localStorage.getItem('rapid_listing_profile');
       if (storedProfile) {
-        setUserProfile(JSON.parse(storedProfile));
+        // Merge with default to ensure new fields (like headerTitle) exist
+        setUserProfile({ ...DEFAULT_PROFILE, ...JSON.parse(storedProfile) });
       }
     } catch (e) {
       console.error("Failed to load local storage data", e);
@@ -104,6 +105,7 @@ export default function App() {
         id: crypto.randomUUID(),
         timestamp: Date.now(),
         partNumber: manualIdentifier, // Storing identifier in partNumber field
+        listingStyle: listingStyle
       };
 
       const updatedDrafts = [newDraft, ...savedDrafts].slice(0, 10);
@@ -144,6 +146,9 @@ export default function App() {
     setIsLoading(true);
     try {
       setManualIdentifier(draft.partNumber || '');
+      if (draft.listingStyle) {
+        setListingStyle(draft.listingStyle);
+      }
       setListing(null);
       setSupplementalData(null);
       setError(null);
@@ -273,10 +278,16 @@ export default function App() {
                 <div className="flex items-center gap-3">
                     <Logo className="h-10 w-10" />
                     <span className="text-xl font-bold tracking-tight text-white hidden sm:block">
-                        Rapid<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Listing</span>Tool
+                        {userProfile.headerTitle && userProfile.headerTitle !== "RapidListingTool.com" ? (
+                             <span className="text-white">{userProfile.headerTitle}</span>
+                        ) : (
+                            <>Rapid<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Listing</span>Tool.com</>
+                        )}
                     </span>
                     <span className="text-xl font-bold tracking-tight text-white sm:hidden">
-                        Rapid<span className="text-teal-400">List</span>
+                        {userProfile.headerTitle ? userProfile.headerTitle.substring(0, 10) + (userProfile.headerTitle.length > 10 ? '...' : '') : (
+                            <>Rapid<span className="text-teal-400">List</span></>
+                        )}
                     </span>
                 </div>
                 <div className="flex items-center gap-4">
@@ -302,7 +313,7 @@ export default function App() {
                     <button 
                         onClick={() => setIsHistoryOpen(true)}
                         className="text-gray-300 hover:text-white text-sm font-medium transition-colors flex items-center gap-2"
-                    > // trigger deploy
+                    >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-fuchsia-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                         </svg>

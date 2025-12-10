@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { downloadEbayCSV } from '../utils/csvExport';
-import { Platform } from '../services/geminiService';
+import { Platform, ListingStyle } from '../services/geminiService';
 import { UserProfile } from './SettingsModal';
 
 export interface SavedScan {
@@ -19,6 +19,7 @@ export interface SavedDraft {
   partImageBase64?: string;
   serialImageBase64?: string;
   partNumber?: string;
+  listingStyle?: ListingStyle;
 }
 
 interface HistorySidebarProps {
@@ -188,7 +189,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
               </svg>
               Activity
             </h2>
-            <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors">
+            <button 
+                onClick={onClose} 
+                className="text-gray-400 hover:text-white transition-colors"
+                title="Close History"
+            >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
@@ -234,11 +239,6 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     <p className="text-sm">Click "Save Draft" while working to save for later.</p>
                 </div>
             ) : (
-                drafts.length === 0 ? (
-                  <div className="text-center text-gray-500 mt-10">
-                    <p className="mb-2">No saved drafts.</p>
-                  </div>
-                ) : (
                 drafts.map((draft) => (
                     <DraftItem 
                         key={draft.id}
@@ -248,7 +248,6 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     />
                 ))
             )
-            )
         )}
       </div>
 
@@ -257,6 +256,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             <button 
                 onClick={handleExport}
                 className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 text-white font-bold py-3 px-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-0.5"
+                title="Download CSV for eBay Seller Hub"
             >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
