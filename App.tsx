@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultCard } from './components/ResultCard';
 import { Spinner } from './components/Spinner';
-import { extractIdentifierFromImage, generateListingContent, getProductData, ListingStyle, Platform, ScanType } from './services/geminiService';
+import { extractIdentifierFromImage, generateListingContent, getProductData, performVisualSearch, ListingStyle, Platform, ScanType } from './services/geminiService';
 import { fileToBase64 } from './utils/fileUtils';
 import { CompatibilityCard } from './components/CompatibilityCard';
 import { FirebaseSetupModal } from './components/FirebaseSetupModal';
@@ -29,7 +29,11 @@ export default function App() {
   const [currentStep, setCurrentStep] = useState('');
   const [error, setError] = useState<string | null>(null);
 
+  // Lookup / Visual Search State
+  const [lookupMethod, setLookupMethod] = useState<'text' | 'image'>('text');
   const [manualIdentifier, setManualIdentifier] = useState('');
+  const [visualLookupImage, setVisualLookupImage] = useState<{ file: File; base64: string } | null>(null);
+  
   const [supplementalData, setSupplementalData] = useState<string | null>(null); // Fits both Auto Fitment and Product Specs
   const [isLookupLoading, setIsLookupLoading] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
@@ -55,6 +59,14 @@ export default function App() {
   const [price, setPrice] = useState('');
   const [location, setLocation] = useState('');
   const [condition, setCondition] = useState('Used - Good');
+
+  // Auto Part Specifics (eBay Motors Requirements)
+  const [donorVin, setDonorVin] = useState('');
+  const [mileage, setMileage] = useState('');
+  
+  // ACES/PIES Data Input
+  const [acesPiesData, setAcesPiesData] = useState('');
+  const [showAdvancedData, setShowAdvancedData] = useState(false);
 
   // Load history, drafts, and profile from localStorage on mount
   useEffect(() => {
@@ -130,7 +142,6 @@ export default function App() {
     setPlatform(scan.platform || 'ebay');
     
     // Attempt to guess scan type from content or default to auto
-    // In a future update, scanType should be saved in history
     setScanType('auto-part'); 
     
     setPartImage(null);
@@ -177,6 +188,16 @@ export default function App() {
     }
   }, []);
 
+  const handleVisualImageUpload = useCallback(async (file: File) => {
+    try {
+        const base64 = await fileToBase64(file);
+        setVisualLookupImage({ file, base64 });
+        setLookupError(null);
+    } catch (err) {
+        setLookupError('Failed to process image. Please try another file.');
+    }
+  }, []);
+
   const handleGenerateListing = async () => {
     if (!partImage || !serialImage) {
       setError('Please upload both an Item photo and a Code/ID photo.');
@@ -190,7 +211,7 @@ export default function App() {
     setLookupError(null);
 
     try {
-      const step1Text = scanType === 'auto-part' ? 'Extracting part number...' : 'Scanning barcode/UPC...';
+      const step1Text = scanType === 'auto-part' ? 'Extracting OEM part number...' : 'Scanning barcode/UPC...';
       setCurrentStep(step1Text);
       const extractedId = await extractIdentifierFromImage(serialImage.base64, scanType);
 
@@ -199,13 +220,13 @@ export default function App() {
       }
       
       const step2Text = scanType === 'auto-part' 
-        ? `Part #${extractedId} found. Checking fitment...` 
+        ? `Part #${extractedId} found. Checking ACES/Fitment data...` 
         : `ID ${extractedId} found. Looking up product specs...`;
       setCurrentStep(step2Text);
       
       const dataHtml = await getProductData(extractedId, scanType);
       
-      setCurrentStep(`Generating ${platform} listing...`);
+      setCurrentStep(acesPiesData ? `Parsing ACES/PIES data & generating ${platform} listing...` : `Generating ${platform} listing...`);
       
       const generatedListing = await generateListingContent(
           partImage.base64, 
@@ -214,7 +235,7 @@ export default function App() {
           listingStyle, 
           platform,
           scanType,
-          { price, location, condition }
+          { price, location, condition, donorVin, mileage, acesPiesData }
       );
 
       setListing(generatedListing);
@@ -258,6 +279,28 @@ export default function App() {
       setLookupError(`Lookup failed: ${errorMessage}`);
     } finally {
       setIsLookupLoading(false);
+    }
+  };
+
+  const handleVisualLookup = async () => {
+    if (!visualLookupImage) {
+        setLookupError('Please upload an image to search.');
+        return;
+    }
+    setIsLookupLoading(true);
+    setLookupError(null);
+    setSupplementalData(null);
+    setListing(null);
+    setError(null);
+
+    try {
+        const data = await performVisualSearch(visualLookupImage.base64, scanType);
+        setSupplementalData(data);
+    } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
+        setLookupError(`Visual search failed: ${errorMessage}`);
+    } finally {
+        setIsLookupLoading(false);
     }
   };
 
@@ -377,7 +420,7 @@ export default function App() {
              <div className={`absolute top-0 left-1/2 transform -translate-x-1/2 -translate-y-1/2 px-4 py-1 rounded-full text-xs font-bold uppercase tracking-widest shadow-xl border ${
                  scanType === 'auto-part' ? 'bg-fuchsia-900 text-fuchsia-200 border-fuchsia-700' : 'bg-cyan-900 text-cyan-200 border-cyan-700'
              }`}>
-                 {scanType === 'auto-part' ? 'Auto Parts Scanner' : 'Barcode & Product Scanner'}
+                 {scanType === 'auto-part' ? 'Auto Parts Scanner (eBay Motors)' : 'Barcode & Product Scanner'}
              </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 mb-6 mt-4">
@@ -444,8 +487,78 @@ export default function App() {
                             <option value="table-layout">Table Layout</option>
                             <option value="bold-classic">Bold Classic</option>
                             <option value="modern-card">Modern Card</option>
+                            <option value="luxury">Luxury / High-End</option>
+                            <option value="vintage">Vintage / Retro</option>
+                            <option value="handmade">Handmade / Artisan</option>
+                            <option value="collectible">Collectible / Investment</option>
                         </select>
                       </div>
+                  )}
+
+                  {/* Auto Parts Specific Inputs (VIN/Mileage) - Critical for eBay Motors */}
+                  {scanType === 'auto-part' && (
+                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-2 animate-fade-in bg-fuchsia-900/10 p-4 rounded-xl border border-fuchsia-800/30">
+                         <div>
+                             <label className="block text-sm font-medium text-gray-300 mb-1">Donor VIN (Optional)</label>
+                             <input 
+                                 type="text" 
+                                 value={donorVin} 
+                                 onChange={(e) => setDonorVin(e.target.value)} 
+                                 placeholder="17-Digit VIN" 
+                                 maxLength={17}
+                                 className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-fuchsia-500 focus:outline-none placeholder-gray-600"
+                             />
+                         </div>
+                         <div>
+                             <label className="block text-sm font-medium text-gray-300 mb-1">Mileage (Optional)</label>
+                             <input 
+                                 type="text" 
+                                 value={mileage} 
+                                 onChange={(e) => setMileage(e.target.value)} 
+                                 placeholder="e.g. 120,000" 
+                                 className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-fuchsia-500 focus:outline-none placeholder-gray-600"
+                             />
+                         </div>
+                     </div>
+                  )}
+                  
+                  {/* Advanced ACES/PIES Data Input */}
+                  {scanType === 'auto-part' && (
+                     <div className="mb-4">
+                        <button 
+                            type="button" 
+                            onClick={() => setShowAdvancedData(!showAdvancedData)}
+                            className="text-xs font-semibold text-fuchsia-400 hover:text-fuchsia-300 flex items-center gap-1 mb-2 transition-colors"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 transform transition-transform ${showAdvancedData ? 'rotate-90' : ''}`} viewBox="0 0 20 20" fill="currentColor">
+                                <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                            </svg>
+                            Advanced: ACES/PIES Data Import (XML/CSV)
+                        </button>
+                        
+                        {showAdvancedData && (
+                            <div className="bg-gray-900/80 border border-gray-700 p-3 rounded-lg animate-fade-in">
+                                <label className="block text-xs text-gray-400 mb-2">
+                                    Paste raw ACES (Vehicle Fitment) or PIES (Product Attribute) XML/JSON data here. 
+                                    The AI will parse this standard data to generate precise compatibility tables and item specifics.
+                                </label>
+                                <textarea
+                                    value={acesPiesData}
+                                    onChange={(e) => setAcesPiesData(e.target.value)}
+                                    placeholder="<App action='A' id='1'><BaseVehicle id='1234'/><EngineBase id='56'/></App>..."
+                                    className="w-full h-32 bg-gray-950 border border-gray-700 rounded p-2 text-xs font-mono text-green-400 focus:ring-1 focus:ring-fuchsia-500 focus:outline-none"
+                                />
+                                {acesPiesData && (
+                                    <div className="mt-2 text-xs text-green-400 flex items-center gap-1">
+                                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                        </svg>
+                                        Data loaded. AI will prioritize this over visual analysis.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                     </div>
                   )}
 
                   {/* Additional Fields */}
@@ -526,44 +639,101 @@ export default function App() {
           )}
 
           <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50">
-             <h2 className={`text-2xl font-bold text-white mb-4 flex items-center gap-2`}>
-                <svg xmlns="http://www.w3.org/2000/svg" className={`h-6 w-6 ${scanType === 'auto-part' ? 'text-green-400' : 'text-yellow-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                {scanType === 'auto-part' ? 'Manual Fitment Check' : 'Manual Product Lookup'}
-             </h2>
-             <p className="text-gray-400 mb-4 text-sm">
-                {scanType === 'auto-part' 
-                    ? "Enter a part number manually to check vehicle compatibility without generating a full listing."
-                    : "Enter a UPC, Barcode, or Model Number manually to check product specs."}
-             </p>
-             <div className="flex flex-col md:flex-row gap-4">
-                <input 
-                  type="text" 
-                  value={manualIdentifier}
-                  onChange={(e) => setManualIdentifier(e.target.value)}
-                  placeholder={scanType === 'auto-part' ? "e.g. 89661-02K30" : "e.g. 885909950805 or KD-55X85J"}
-                  className="flex-grow bg-gray-900 border border-gray-700 text-white px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
-                />
-                <button 
-                  onClick={handleManualLookup}
-                  disabled={isLookupLoading}
-                  className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors whitespace-nowrap border border-gray-600"
-                >
-                  {isLookupLoading ? 'Searching...' : 'Lookup'}
-                </button>
+             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                 <div>
+                    <h2 className={`text-2xl font-bold text-white mb-1 flex items-center gap-2`}>
+                        <svg xmlns="http://www.w3.org/2000/svg" className={`h-6 w-6 ${scanType === 'auto-part' ? 'text-green-400' : 'text-yellow-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                        </svg>
+                        {scanType === 'auto-part' ? 'Manual Fitment Check' : 'Manual Product Lookup'}
+                    </h2>
+                    <p className="text-gray-400 text-sm">
+                        {scanType === 'auto-part' 
+                            ? "Check fitment without generating a full listing."
+                            : "Check product specs without generating a full listing."}
+                    </p>
+                 </div>
+                 
+                 <div className="flex bg-gray-800 p-1 rounded-lg">
+                     <button
+                        onClick={() => setLookupMethod('text')}
+                        className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${
+                            lookupMethod === 'text' 
+                                ? 'bg-gray-700 text-white shadow' 
+                                : 'text-gray-500 hover:text-gray-300'
+                        }`}
+                     >
+                        Text Lookup
+                     </button>
+                     <button
+                        onClick={() => setLookupMethod('image')}
+                        className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${
+                            lookupMethod === 'image' 
+                                ? 'bg-blue-600 text-white shadow' 
+                                : 'text-gray-500 hover:text-gray-300'
+                        }`}
+                     >
+                        Visual Search
+                     </button>
+                 </div>
              </div>
+
+             {lookupMethod === 'text' ? (
+                <div className="flex flex-col md:flex-row gap-4 animate-fade-in">
+                    <input 
+                      type="text" 
+                      value={manualIdentifier}
+                      onChange={(e) => setManualIdentifier(e.target.value)}
+                      placeholder={scanType === 'auto-part' ? "e.g. 89661-02K30" : "e.g. 885909950805 or KD-55X85J"}
+                      className="flex-grow bg-gray-900 border border-gray-700 text-white px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
+                    />
+                    <button 
+                      onClick={handleManualLookup}
+                      disabled={isLookupLoading}
+                      className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors whitespace-nowrap border border-gray-600"
+                    >
+                      {isLookupLoading ? 'Searching...' : 'Lookup'}
+                    </button>
+                 </div>
+             ) : (
+                <div className="animate-fade-in space-y-4">
+                     <div className="w-full max-w-md mx-auto">
+                        <ImageUploader 
+                            id="visual-search-upload" 
+                            label="Upload Photo for Visual Search" 
+                            onImageUpload={handleVisualImageUpload} 
+                            imagePreviewUrl={visualLookupImage ? URL.createObjectURL(visualLookupImage.file) : null}
+                            onClearImage={() => setVisualLookupImage(null)}
+                        />
+                     </div>
+                     <div className="flex justify-center">
+                        <button 
+                            onClick={handleVisualLookup}
+                            disabled={isLookupLoading || !visualLookupImage}
+                            className={`font-semibold py-3 px-8 rounded-lg transition-colors whitespace-nowrap border ${
+                                isLookupLoading || !visualLookupImage
+                                    ? 'bg-gray-800 border-gray-700 text-gray-500 cursor-not-allowed'
+                                    : 'bg-blue-600 hover:bg-blue-500 border-blue-500 text-white shadow-lg shadow-blue-900/30'
+                            }`}
+                        >
+                            {isLookupLoading ? 'Analyzing Image...' : 'Identify & Search'}
+                        </button>
+                     </div>
+                </div>
+             )}
+
              {lookupError && (
-                <div className="mt-4 p-3 bg-red-900/20 border border-red-800 text-red-300 rounded-md text-sm">
+                <div className="mt-4 p-3 bg-red-900/20 border border-red-800 text-red-300 rounded-md text-sm text-center">
                     {lookupError}
                 </div>
              )}
+             
              {supplementalData && (
                 <div className="mt-6 animate-fade-in">
                     <CompatibilityCard 
-                        partNumber={manualIdentifier} 
+                        partNumber={manualIdentifier || (visualLookupImage ? "Visual Identification" : "Unknown Item")} 
                         compatibilityHtml={supplementalData} 
-                        titleOverride={scanType === 'general-item' ? 'Product Specifications' : undefined}
+                        titleOverride={lookupMethod === 'image' ? 'Visual Search Report' : (scanType === 'general-item' ? 'Product Specifications' : undefined)}
                     />
                 </div>
              )}

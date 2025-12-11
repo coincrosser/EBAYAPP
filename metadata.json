@@ -1,5 +1,7 @@
 {
   "name": "RapidListingTool.com",
-  "description": "The ultimate AI-powered listing generator for auto parts and everyday items. Scan barcodes, extract data, and list on eBay, Facebook, or Craigslist in seconds.",
-  "requestFramePermissions": []
+  "description": "The ultimate AI-powered listing generator. Scan auto parts or general items via text, barcode, or visual search. Deploy professional listings to eBay, Facebook, or Craigslist in seconds.",
+  "requestFramePermissions": [
+    "camera"
+  ]
 }
