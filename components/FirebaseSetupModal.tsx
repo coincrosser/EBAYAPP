@@ -15,16 +15,12 @@ const fileContents = {
   "dependencies": {
     "@google/genai": "^1.28.0",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "lucide-react": "^0.344.0"
+    "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.66",
     "@types/react-dom": "^18.2.22",
     "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.19",
-    "postcss": "^8.4.38",
-    "tailwindcss": "^3.4.3",
     "typescript": "^5.2.2",
     "vite": "^5.2.0"
   }
@@ -66,44 +62,52 @@ export default defineConfig(({ mode }) => {
   '.env.example': `API_KEY=your_gemini_api_key_here`,
   'README.md': `# RapidListingTool Deployment Guide
 
-## Option 1: Firebase Hosting (Recommended)
+## Deployment Instructions
+
+### Option 1: Firebase Hosting
 
 1. **Prerequisites:**
    - Install Node.js
    - Install Firebase CLI: \`npm install -g firebase-tools\`
 
-2. **Setup:**
-   - Create a new directory on your computer.
-   - Copy all source files (\`src/\`, \`index.html\`, etc.) from the editor into this directory.
-   - Copy the configuration files from this modal (\`package.json\`, \`firebase.json\`, \`vite.config.ts\`) into the root.
+2. **Project Setup:**
+   - Create a new directory locally.
+   - Copy all project files into it.
+   - Create the config files (\`package.json\`, \`firebase.json\`, \`vite.config.ts\`) using the content in this modal.
+   - Create a \`.env\` file with your API key: \`API_KEY=AIza...\`
 
-3. **Install & Build:**
+3. **Install Dependencies:**
    \`\`\`bash
    npm install
-   npm run build
    \`\`\`
 
-4. **Deploy:**
+4. **Build the App:**
+   \`\`\`bash
+   npm run build
+   \`\`\`
+   *This creates a \`dist\` folder containing your production app.*
+
+5. **Deploy:**
    \`\`\`bash
    firebase login
    firebase init hosting
-   # Select "dist" as your public directory
-   # Configure as single-page app: Yes
+   # Select "Use an existing project" -> rapidlistingtool (or create new)
+   # What do you want to use as your public directory? -> dist
+   # Configure as a single-page app (rewrite all urls to /index.html)? -> Yes
+   # Set up automatic builds and deploys with GitHub? -> No (or Yes if you prefer)
+   # File dist/index.html already exists. Overwrite? -> No
+   
    firebase deploy
    \`\`\`
 
-## Option 2: GitHub Pages / Vercel / Netlify
+### Option 2: GitHub / Vercel / Netlify
 
-1. **Push to GitHub:**
-   - Create a repository and push your code.
-
-2. **Connect to Host:**
-   - Go to Vercel/Netlify and import your repo.
-   - Set Build Command: \`npm run build\`
-   - Set Output Directory: \`dist\`
-
-3. **Environment Variables:**
-   - **CRITICAL:** You must add your \`API_KEY\` to the Environment Variables settings in your hosting dashboard (Vercel/Netlify/Firebase Console) for the AI features to work.
+1. Push your code to a GitHub repository.
+2. Import the project in Vercel or Netlify.
+3. Settings:
+   - **Build Command:** \`npm run build\`
+   - **Output Directory:** \`dist\`
+   - **Environment Variables:** Add \`API_KEY\` with your Gemini API key value.
 `,
   'tsconfig.json': `{
   "compilerOptions": {
@@ -187,9 +191,10 @@ export const FirebaseSetupModal: React.FC<{ onClose: () => void }> = ({ onClose 
                             <p className="font-bold mb-1">Deployment Instructions:</p>
                             <ol className="list-decimal list-inside space-y-1 text-gray-300">
                                 <li><strong>Download</strong> the files below.</li>
-                                <li><strong>Upload</strong> these config files AND your source code to a GitHub repository.</li>
-                                <li><strong>Connect</strong> to Firebase Hosting (or Vercel/Netlify) via their dashboard.</li>
-                                <li><strong>Important:</strong> Add your <code>API_KEY</code> to the hosting provider's Environment Variables.</li>
+                                <li><strong>Upload</strong> these config files AND your source code to your project root.</li>
+                                <li><strong>Build</strong> the project using <code>npm run build</code>.</li>
+                                <li><strong>Deploy</strong> the <code>dist</code> folder using <code>firebase deploy</code>.</li>
+                                <li><strong>Note:</strong> Ensure you have a <code>.env</code> file with <code>API_KEY</code>.</li>
                             </ol>
                         </div>
                     </div>
