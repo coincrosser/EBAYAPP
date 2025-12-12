@@ -17,6 +17,7 @@ export interface ListingOptions {
     donorVin?: string;
     mileage?: string;
     acesPiesData?: string; // Raw XML or CSV content
+    donorVehicleDetails?: string; // Decoded VIN details
 }
 
 const imageDataUrlToGenerativePart = (dataUrl: string) => {
@@ -38,6 +39,32 @@ const imageDataUrlToGenerativePart = (dataUrl: string) => {
     },
   };
 };
+
+export async function decodeVin(vin: string): Promise<string> {
+  const prompt = `
+    You are an expert VIN decoder.
+    Decode the VIN: "${vin}".
+    Use Google Search to verify the Year, Make, Model, Trim, and Engine.
+    Return ONLY a single string summary.
+    Format: "Year Make Model Trim Engine"
+    Example: "2018 Ford F-150 Lariat 3.5L V6"
+    If you cannot find specific details, return "Vehicle Details Not Found".
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
+    return response.text.trim();
+  } catch (error) {
+    console.error("Error decoding VIN:", error);
+    throw new Error("Could not decode VIN.");
+  }
+}
 
 export async function extractIdentifierFromImage(imageDataUrl: string, type: ScanType): Promise<string> {
   const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
@@ -339,6 +366,7 @@ export async function generateListingContent(
   // Construct Donor Stats HTML if available
   let statsHtml = '';
   if (type === 'auto-part') {
+      if (options?.donorVehicleDetails) statsHtml += `<strong>Donor Vehicle:</strong> ${options.donorVehicleDetails}<br/>`;
       if (options?.donorVin) statsHtml += `<strong>VIN:</strong> ${options.donorVin}<br/>`;
       if (options?.mileage) statsHtml += `<strong>Mileage:</strong> ${options.mileage}<br/>`;
   }
@@ -414,6 +442,7 @@ export async function generateListingContent(
     instructions = `
         ${acesPiesContext}
         ${getStyleInstruction(style, identifier, supplementalHtml, type, statsHtml)}
+        ${type === 'auto-part' && options?.donorVehicleDetails ? `*   **Donor Vehicle Identified:** ${options.donorVehicleDetails}. Use this to ensure title accuracy (Year/Make/Model).` : ''}
     `;
   }
 

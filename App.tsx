@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { ImageUploader } from './components/ImageUploader';
 import { ResultCard } from './components/ResultCard';
 import { Spinner } from './components/Spinner';
-import { extractIdentifierFromImage, generateListingContent, getProductData, performVisualSearch, ListingStyle, Platform, ScanType } from './services/geminiService';
+import { extractIdentifierFromImage, generateListingContent, getProductData, performVisualSearch, decodeVin, ListingStyle, Platform, ScanType } from './services/geminiService';
 import { fileToBase64 } from './utils/fileUtils';
 import { CompatibilityCard } from './components/CompatibilityCard';
 import { FirebaseSetupModal } from './components/FirebaseSetupModal';
@@ -63,6 +63,8 @@ export default function App() {
   // Auto Part Specifics (eBay Motors Requirements)
   const [donorVin, setDonorVin] = useState('');
   const [mileage, setMileage] = useState('');
+  const [donorVehicleDetails, setDonorVehicleDetails] = useState('');
+  const [isVinLoading, setIsVinLoading] = useState(false);
   
   // ACES/PIES Data Input
   const [acesPiesData, setAcesPiesData] = useState('');
@@ -198,6 +200,21 @@ export default function App() {
     }
   }, []);
 
+  const handleVinDecode = async () => {
+    if (donorVin.length < 17) return;
+    setIsVinLoading(true);
+    setDonorVehicleDetails('');
+    try {
+        const result = await decodeVin(donorVin);
+        setDonorVehicleDetails(result);
+    } catch (err) {
+        console.error("VIN Decode Error", err);
+        setDonorVehicleDetails("Could not decode VIN.");
+    } finally {
+        setIsVinLoading(false);
+    }
+  };
+
   const handleGenerateListing = async () => {
     if (!partImage || !serialImage) {
       setError('Please upload both an Item photo and a Code/ID photo.');
@@ -235,7 +252,7 @@ export default function App() {
           listingStyle, 
           platform,
           scanType,
-          { price, location, condition, donorVin, mileage, acesPiesData }
+          { price, location, condition, donorVin, mileage, acesPiesData, donorVehicleDetails }
       );
 
       setListing(generatedListing);
@@ -500,14 +517,34 @@ export default function App() {
                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-2 animate-fade-in bg-fuchsia-900/10 p-4 rounded-xl border border-fuchsia-800/30">
                          <div>
                              <label className="block text-sm font-medium text-gray-300 mb-1">Donor VIN (Optional)</label>
-                             <input 
-                                 type="text" 
-                                 value={donorVin} 
-                                 onChange={(e) => setDonorVin(e.target.value)} 
-                                 placeholder="17-Digit VIN" 
-                                 maxLength={17}
-                                 className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-fuchsia-500 focus:outline-none placeholder-gray-600"
-                             />
+                             <div className="flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={donorVin} 
+                                    onChange={(e) => setDonorVin(e.target.value)} 
+                                    placeholder="17-Digit VIN" 
+                                    maxLength={17}
+                                    className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-fuchsia-500 focus:outline-none placeholder-gray-600 uppercase"
+                                />
+                                <button
+                                    onClick={handleVinDecode}
+                                    disabled={isVinLoading || donorVin.length < 17}
+                                    className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-xs font-bold transition-colors border border-gray-600 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+                                >
+                                    {isVinLoading ? 'Decoding...' : 'Decode'}
+                                </button>
+                             </div>
+                             {donorVehicleDetails && (
+                                <div className="mt-2 text-xs text-green-400 bg-green-900/20 border border-green-800 p-2 rounded flex items-center gap-2">
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                    </svg>
+                                    <span className="flex-grow">{donorVehicleDetails}</span>
+                                    <button onClick={() => setDonorVehicleDetails('')} className="ml-auto text-gray-500 hover:text-white">
+                                        &times;
+                                    </button>
+                                </div>
+                             )}
                          </div>
                          <div>
                              <label className="block text-sm font-medium text-gray-300 mb-1">Mileage (Optional)</label>
