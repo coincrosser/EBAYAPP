@@ -2,22 +2,24 @@ import React, { useState, useEffect } from 'react';
 
 export interface UserProfile {
   businessName: string;
-  headerTitle: string; // New field for App Header
+  headerTitle: string; 
   location: string;
   shippingPolicy: string;
   returnPolicy: string;
   aboutAuto: string;
+  aboutElectronics: string; // New field
   aboutGeneral: string;
 }
 
 export const DEFAULT_PROFILE: UserProfile = {
-  businessName: "ChrisJayden",
+  businessName: "Rapid Listing Tool",
   headerTitle: "RapidListingTool.com",
   location: "Oklahoma City",
   shippingPolicy: "The buyer is responsible for all shipping costs associated with this item.",
   returnPolicy: "We stand behind the accuracy of our listings. If you receive an item that is not as described, returns are accepted within 15 days of receipt.",
-  aboutAuto: "At ChrisJayden Auto Repair, our business is built on hands-on automotive experience. Based physically in Oklahoma City, we specialize in the meticulous process of acquiring salvage vehicles and performing complete quality rebuilds. We harvest the best components—the very kind we trust in our own rebuild projects—and make them available to you.",
-  aboutGeneral: "We are a trusted Oklahoma City based seller committed to providing quality pre-owned and surplus items. Buy with confidence."
+  aboutAuto: "At Rapid Listing Tool, our business is built on hands-on automotive experience. Based physically in Oklahoma City, we specialize in the meticulous process of acquiring quality salvage parts and performing thorough inspections. We harvest the best components—the very kind we trust in our own rebuild projects—and make them available to you.",
+  aboutElectronics: "We specialize in quality pre-owned electronics. All devices are tested for power and basic functionality unless otherwise stated. Serial numbers are recorded for all shipments to prevent fraud.",
+  aboutGeneral: "We are a trusted seller committed to providing quality pre-owned and surplus items. Buy with confidence."
 };
 
 interface SettingsModalProps {
@@ -27,7 +29,6 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, currentProfile }) => {
-  // Ensure headerTitle exists if migrating from an older profile version
   const [profile, setProfile] = useState<UserProfile>({
     ...DEFAULT_PROFILE,
     ...currentProfile
@@ -38,7 +39,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
   };
 
   const handleReset = () => {
-    if (window.confirm("Reset to default ChrisJayden profile?")) {
+    if (window.confirm("Reset to default Rapid Listing Tool profile?")) {
         setProfile(DEFAULT_PROFILE);
     }
   };
@@ -80,7 +81,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                         value={profile.businessName}
                         onChange={(e) => handleChange('businessName', e.target.value)}
                         className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g. ChrisJayden"
+                        placeholder="e.g. Rapid Listing Tool"
                     />
                 </div>
                  <div>
@@ -92,7 +93,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                         className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"
                         placeholder="e.g. My Company Tool"
                     />
-                    <p className="text-xs text-gray-500 mt-1">Replaces "RapidListingTool.com" in top bar</p>
                 </div>
                 <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
@@ -101,7 +101,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                         value={profile.location}
                         onChange={(e) => handleChange('location', e.target.value)}
                         className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-blue-500 focus:border-blue-500"
-                        placeholder="e.g. Oklahoma City"
                     />
                 </div>
             </div>
@@ -134,8 +133,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                     <textarea 
                         value={profile.aboutAuto}
                         onChange={(e) => handleChange('aboutAuto', e.target.value)}
-                        rows={3}
+                        rows={2}
                         className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-fuchsia-500 focus:border-fuchsia-500"
+                    />
+                </div>
+
+                <div className="mb-4">
+                    <label className="block text-sm font-medium text-indigo-400 mb-1">Electronics Mode Bio</label>
+                    <textarea 
+                        value={profile.aboutElectronics || ''}
+                        onChange={(e) => handleChange('aboutElectronics', e.target.value)}
+                        rows={2}
+                        className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-indigo-500 focus:border-indigo-500"
+                        placeholder="We specialize in quality pre-owned electronics..."
                     />
                 </div>
 
@@ -144,7 +154,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, onSave, c
                     <textarea 
                         value={profile.aboutGeneral}
                         onChange={(e) => handleChange('aboutGeneral', e.target.value)}
-                        rows={3}
+                        rows={2}
                         className="w-full bg-gray-900 border border-gray-700 text-white rounded-lg p-2.5 focus:ring-cyan-500 focus:border-cyan-500"
                     />
                 </div>

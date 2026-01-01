@@ -53,6 +53,38 @@ About ${p.businessName}
 ${p.aboutAuto}
 `;
 
+// --- ELECTRONICS FOOTERS ---
+const getElectronicsFooterHtml = (p: UserProfile) => `
+<hr style="margin: 2rem 0; border-color: #e5e7eb;" />
+<section style="margin-bottom: 1.5rem;">
+  <h3>Condition & Serial Numbers</h3>
+  <p>All electronic devices are tested for power and key functionality unless sold as "For Parts". <strong>Serial numbers are recorded for every item shipped</strong> to prevent return fraud. Tamper-evident seals must be intact for returns.</p>
+  <p>Battery life on used portable electronics is not guaranteed unless specified.</p>
+</section>
+<section style="margin-bottom: 1.5rem;">
+  <h3>Shipping & Return Policy</h3>
+  <p><strong>Shipping:</strong> ${p.shippingPolicy}</p>
+  <p><strong>Returns:</strong> ${p.returnPolicy}</p>
+</section>
+<section style="margin-bottom: 1.5rem;">
+  <h3>About ${p.businessName}</h3>
+  <p>${p.aboutElectronics || 'We specialize in quality pre-owned electronics.'}</p>
+</section>
+`;
+
+const getElectronicsFooterText = (p: UserProfile) => `
+--------------------------------------------------
+Condition & Serial Numbers
+All items tested unless marked "For Parts". Serial numbers recorded for fraud prevention. Battery life not guaranteed on used items.
+
+Shipping & Return Policy
+Shipping: ${p.shippingPolicy}
+Returns: ${p.returnPolicy}
+
+About ${p.businessName}
+${p.aboutElectronics || 'We specialize in quality pre-owned electronics.'}
+`;
+
 // --- GENERAL ITEMS FOOTERS ---
 const getGeneralFooterHtml = (p: UserProfile) => `
 <hr style="margin: 2rem 0; border-color: #e5e7eb;" />
@@ -81,13 +113,18 @@ export const ResultCard: React.FC<ResultCardProps> = ({ title, description, plat
   const [copied, setCopied] = useState(false);
   const [htmlCopied, setHtmlCopied] = useState(false);
 
-  const isHtml = platform === 'ebay';
+  // If description contains an image tag, treat as HTML regardless of platform
+  const hasEmbeddedImage = description.includes('<img');
+  const isHtml = platform === 'ebay' || hasEmbeddedImage;
+  
   const hasBranding = description.includes(userProfile.businessName);
 
   // Determine which footer to use
   let footerToUse = '';
   if (scanType === 'auto-part') {
       footerToUse = isHtml ? getAutoFooterHtml(userProfile) : getAutoFooterText(userProfile);
+  } else if (scanType === 'electronics') {
+      footerToUse = isHtml ? getElectronicsFooterHtml(userProfile) : getElectronicsFooterText(userProfile);
   } else {
       footerToUse = isHtml ? getGeneralFooterHtml(userProfile) : getGeneralFooterText(userProfile);
   }
@@ -129,6 +166,20 @@ export const ResultCard: React.FC<ResultCardProps> = ({ title, description, plat
     URL.revokeObjectURL(url);
   };
 
+  const handleDownloadHtml = () => {
+     if (!isHtml) return;
+     const htmlContent = `<!DOCTYPE html><html><head><title>${title}</title><meta charset="UTF-8"></head><body>${fullDescription}</body></html>`;
+     const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
+     const url = URL.createObjectURL(blob);
+     const link = document.createElement('a');
+     link.href = url;
+     link.download = `ebay-listing-${Date.now()}.html`;
+     document.body.appendChild(link);
+     link.click();
+     document.body.removeChild(link);
+     URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl p-4 md:p-6 border border-gray-700">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 sm:gap-2">
@@ -137,13 +188,23 @@ export const ResultCard: React.FC<ResultCardProps> = ({ title, description, plat
         </h2>
         <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
           {isHtml && (
-            <button
-                onClick={handleCopyHtml}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-purple-500 transition-colors"
-            >
-                <span>{htmlCopied ? 'Copied!' : 'Copy HTML'}</span>
-                <CodeIcon />
-            </button>
+            <>
+                <button
+                    onClick={handleCopyHtml}
+                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-purple-500 transition-colors"
+                >
+                    <span>{htmlCopied ? 'Copied!' : 'Copy HTML'}</span>
+                    <CodeIcon />
+                </button>
+                <button
+                    onClick={handleDownloadHtml}
+                    className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-teal-600 rounded-lg hover:bg-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-teal-500 transition-colors"
+                    title="Download as .html file (Best for embedded images)"
+                >
+                    <span>Download HTML</span>
+                    <DownloadIcon />
+                </button>
+            </>
           )}
           
           <button
@@ -159,8 +220,9 @@ export const ResultCard: React.FC<ResultCardProps> = ({ title, description, plat
            <button
             onClick={handleDownload}
             className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 transition-colors"
+            title="Download as .txt file"
           >
-            <span>Download</span>
+            <span>{isHtml ? 'Download Text' : 'Download'}</span>
             <DownloadIcon />
           </button>
         </div>

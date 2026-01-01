@@ -5,8 +5,10 @@ import React, { useState } from 'react';
 const fileContents = {
   'metadata.json': `{
   "name": "RapidListingTool.com",
-  "description": "The ultimate AI-powered listing generator for auto parts. Rapidly create professional eBay listings with ACES/PIES data.",
-  "requestFramePermissions": []
+  "description": "The ultimate AI-powered listing generator. Scan auto parts or general items via text, barcode, or visual search. Deploy professional listings to eBay, Facebook, or Craigslist in seconds.",
+  "requestFramePermissions": [
+    "camera"
+  ]
 }`,
   'index.html': `<!DOCTYPE html>
 <html lang="en">
@@ -47,13 +49,18 @@ if (!API_KEY) {
 }
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-export type ListingStyle = 'professional' | 'minimalist' | 'table-layout' | 'bold-classic' | 'modern-card';
+export type ListingStyle = 'professional' | 'minimalist' | 'table-layout' | 'bold-classic' | 'modern-card' | 'luxury' | 'vintage' | 'handmade' | 'collectible';
 export type Platform = 'ebay' | 'facebook' | 'craigslist';
+export type ScanType = 'auto-part' | 'general-item' | 'electronics';
 
 export interface ListingOptions {
     price?: string;
     location?: string;
     condition?: string;
+    donorVin?: string;
+    mileage?: string;
+    acesPiesData?: string; // Raw XML or CSV content
+    donorVehicleDetails?: string; // Decoded VIN details
 }
 
 const imageDataUrlToGenerativePart = (dataUrl: string) => {
@@ -76,46 +83,131 @@ const imageDataUrlToGenerativePart = (dataUrl: string) => {
   };
 };
 
-export async function extractPartNumberFromImage(imageDataUrl: string): Promise<string> {
-  const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
+export async function decodeVin(vin: string): Promise<string> {
   const prompt = \`
-    Analyze this image of a car part's serial number.
-    Perform Optical Character Recognition (OCR) to identify and extract ONLY the most prominent and likely part number or serial number.
-    Return ONLY the alphanumeric string of the part number, with no extra text, labels, or explanation.
-    If multiple numbers are visible, return the one that is most clearly a serial/part number.
+    You are an expert VIN decoder.
+    Decode the VIN: "\${vin}".
+    Use Google Search to verify the Year, Make, Model, Trim, and Engine.
+    Return ONLY a single string summary.
+    Format: "Year Make Model Trim Engine"
+    Example: "2018 Ford F-150 Lariat 3.5L V6"
+    If you cannot find specific details, return "Vehicle Details Not Found".
   \`;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { parts: [imagePart, { text: prompt }] },
+      model: 'gemini-3-flash-preview',
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
     });
-    const text = response.text.trim();
-    if (!text) {
-        throw new Error("The AI returned an empty response. Please try a clearer image.");
-    }
-    return text;
+    return response.text.trim();
   } catch (error) {
-    console.error("Error extracting part number:", error);
-    throw new Error(\`Failed to extract part number from image. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
+    console.error("Error decoding VIN:", error);
+    throw new Error("Could not decode VIN.");
   }
 }
 
-export async function getCompatibilityData(partNumber: string): Promise<string> {
-  const prompt = \`
-    You are an expert on automotive parts and ACES/PIES compatibility data.
-    For the given auto part number "\${partNumber}", perform a search to find its vehicle compatibility.
-    Your response must be ONLY a well-structured HTML table with a header row (<th>). 
-    Ensure the table is formatted for easy reading and copying into eBay listings.
-    Do not include any other text, explanation, or markdown formatting like \`\`\`.
-    The table should have columns for: "Make", "Model", "Year Range", "Engine/Trim", and "Notes".
-    If you cannot find any compatibility data, return a single HTML paragraph: <p>No compatibility information found for part number \${partNumber}.</p>
+export async function extractIdentifierFromImage(imageDataUrl: string, type: ScanType): Promise<string> {
+  const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
+  
+  const autoPrompt = \`
+    Analyze this image of a used car part.
+    Perform Optical Character Recognition (OCR).
+    Identify the PRIMARY Part Number. 
+    Distinguish between:
+    1. OEM Part Number (Target) - usually printed on a label or stamped clearly (e.g. Toyota 12345-67890).
+    2. Engineering/Casting Number - often cast into metal, slightly different from part number.
+    3. Date Codes/Lot Numbers (Ignore).
+    Return ONLY the alphanumeric string of the most likely OEM Part Number.
   \`;
+
+  const electronicsPrompt = \`
+    Analyze this image of an electronic device or label.
+    Identify the MODEL NUMBER (e.g., "WH-1000XM4", "A1706", "CUH-7215B").
+    Often found on the back, bottom, or under the battery.
+    If a Serial Number (S/N) is prominent, you may ignore it and focus on the Model Number for identification.
+    Return ONLY the alphanumeric Model Number string.
+  \`;
+
+  const generalPrompt = \`
+    Analyze this image of a product.
+    Look specifically for a BARCODE (UPC, EAN), ISBN, or a printed Model Number.
+    Perform OCR to read the numbers below the barcode or the text on the label.
+    Return ONLY the numeric UPC/EAN code or alphanumeric Model Number.
+    If multiple are visible, prefer the UPC (12 digits) or EAN (13 digits).
+    Do not add labels like "UPC:" or "Model:". Just return the code.
+  \`;
+
+  let selectedPrompt = generalPrompt;
+  if (type === 'auto-part') selectedPrompt = autoPrompt;
+  if (type === 'electronics') selectedPrompt = electronicsPrompt;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+      model: 'gemini-3-flash-preview',
+      contents: { parts: [imagePart, { text: selectedPrompt }] },
+    });
+    const text = response.text.trim();
+    if (!text) {
+        throw new Error("The AI returned an empty response. Please try a clearer picture.");
+    }
+    return text;
+  } catch (error) {
+    console.error("Error extracting identifier:", error);
+    throw new Error(\`Failed to extract data from image. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
+  }
+}
+
+export async function getProductData(identifier: string, type: ScanType): Promise<string> {
+  const autoPrompt = \`
+    You are an expert on automotive parts, ACES (Aftermarket Catalog Exchange Standard), and PIES (Product Information Exchange Standard).
+    For the given auto part number "\${identifier}", perform a search to find its vehicle compatibility (Year, Make, Model, Trim).
+    
+    Your response must be ONLY a well-structured HTML table with a header row (<th>). 
+    Ensure the table is formatted for easy reading and copying into eBay listings.
+    Do not include any other text, explanation, or markdown formatting like \`\`\`.
+    The table should have columns for: "Make", "Model", "Year Range", "Engine/Trim", and "Notes/Attributes".
+    If you cannot find any data, return: <p>No compatibility information found for part number \${identifier}.</p>
+  \`;
+
+  const electronicsPrompt = \`
+    You are an expert consumer electronics specialist.
+    For the device model "\${identifier}", find its key technical specifications.
+    
+    Your response must be ONLY a well-structured HTML table with a header row (<th>).
+    Do not include markdown blocks.
+    The table should include columns for: "Spec Category", "Detail".
+    Rows should cover:
+    - Processor / Chipset
+    - RAM / Storage (if applicable)
+    - Screen Size / Resolution (if applicable)
+    - Battery / Power Info
+    - Connectivity (Ports, Wifi, BT)
+    - Release Year
+    
+    If specific specs aren't found, return: <p>No detailed specs found for model \${identifier}.</p>
+  \`;
+
+  const generalPrompt = \`
+    You are an expert product researcher.
+    For the given product identifier (UPC, Barcode, or Model Name): "\${identifier}", perform a search to find its technical specifications.
+    Your response must be ONLY a well-structured HTML table with a header row (<th>).
+    Ensure the table is formatted for easy reading.
+    Do not include any other text.
+    The table should have columns for: "Brand", "Model/MPN", "Category", "Key Features", and "Dimensions/Weight" (if available).
+    If you cannot find specific data, return: <p>No specific product details found for ID \${identifier}.</p>
+  \`;
+
+  let selectedPrompt = generalPrompt;
+  if (type === 'auto-part') selectedPrompt = autoPrompt;
+  if (type === 'electronics') selectedPrompt = electronicsPrompt;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: selectedPrompt,
       config: {
         tools: [{ googleSearch: {} }],
       },
@@ -123,167 +215,331 @@ export async function getCompatibilityData(partNumber: string): Promise<string> 
 
     const text = response.text.trim().replace(/^\\\`\\\`\\\`html\\s*|\\\`\\\`\\\`$/g, '');
     if (!text) {
-        throw new Error("The AI returned an empty response for compatibility data.");
+        throw new Error("The AI returned an empty response for data lookup.");
     }
     return text;
   } catch (error) {
-    console.error("Error fetching compatibility data:", error);
-    throw new Error(\`Failed to look up compatibility data. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
+    console.error("Error fetching product data:", error);
+    throw new Error(\`Failed to look up data. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
   }
 }
 
-const getStyleInstruction = (style: ListingStyle, partNumber: string, compatibilityHtml: string): string => {
-    // eBay HTML Template Logic
+export async function performVisualSearch(imageDataUrl: string, type: ScanType): Promise<string> {
+  const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
+  
+  let typeContext = 'product';
+  if (type === 'auto-part') typeContext = 'auto part';
+  if (type === 'electronics') typeContext = 'electronic device';
+
+  const prompt = \`
+    You are an expert visual search assistant.
+    Analyze the provided image of a \${typeContext}.
+    Use your visual recognition capabilities and Google Search grounding to identify the item.
+    
+    Return a structured HTML report (do not use Markdown code blocks) with the following sections:
+    1. <h3>Visual Identification</h3>
+       <ul>
+         <li><strong>Identified Item:</strong> [Name/Title]</li>
+         <li><strong>Brand/Manufacturer:</strong> [Brand]</li>
+         <li><strong>Model/Series:</strong> [Model]</li>
+       </ul>
+    2. <h3>Market Findings</h3>
+       <p>Search online and list 3-5 similar items currently listed on eBay/Amazon. Include approximate price ranges.</p>
+    3. <h3>Key Details</h3>
+       <p>List visible features, inputs/outputs, condition notes (scratches, wear), or specific part details.</p>
+    
+    If you cannot identify it, state that clearly in the HTML.
+  \`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: { parts: [imagePart, { text: prompt }] },
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
+
+    const text = response.text.trim().replace(/^\\\`\\\`\\\`html\\s*|\\\`\\\`\\\`$/g, '');
+    if (!text) {
+        throw new Error("The AI returned an empty response for visual search.");
+    }
+    return text;
+  } catch (error) {
+    console.error("Error performing visual search:", error);
+    throw new Error(\`Failed to perform visual search. \${error instanceof Error ? error.message : 'An unknown AI error occurred.'}\`);
+  }
+}
+
+const getStyleInstruction = (style: ListingStyle, identifier: string, supplementalHtml: string, type: ScanType, statsHtml: string): string => {
+    // Shared instructions
     const commonInstructions = \`
-        *   Create a concise, SEO-friendly eBay title.
-        *   Include: Year range, Make, Model, Part name, Part number "\${partNumber}", and key specifiers (e.g., AT/MT, Engine Size, OEM).
+        *   Create a concise, SEO-friendly title optimized for search.
+        *   Include: Brand, Model, Key Features, and ID "\${identifier}".
+        *   For Auto Parts: STRICTLY follow the format "Year Make Model PartName Position MPN". Max 80 characters.
+        *   For Electronics: Include Brand, Model, Processor/Spec (if known), and Condition (e.g. "Tested", "Parts Only").
     \`;
+
+    const isAuto = type === 'auto-part';
+    const isElec = type === 'electronics';
+    
+    let specTitle = "Product Specifications";
+    if (isAuto) specTitle = "Vehicle Fitment (ACES)";
+    if (isElec) specTitle = "Technical Specifications";
+
+    let condTitle = "Pre-Owned / Used";
+    if (isAuto) condTitle = "Used OEM";
+    if (isElec) condTitle = "Used - Tested & Working";
 
     if (style === 'minimalist') {
         return \`
             \${commonInstructions}
-
-            **Description Generation (Minimalist HTML Format):**
-            *   The goal is a clean, mobile-friendly listing with short text and bullet points.
-            *   Wrap content in an <article> tag.
+            **Description Generation (Minimalist HTML):**
+            *   Clean, mobile-friendly, bullet points.
             *   Structure:
-                1.  <h2>Title</h2> (Same as generated title)
+                1.  <h2>Title</h2>
                 2.  <h3>Quick Specs</h3>
                     <ul>
-                        <li><strong>Part Number:</strong> \${partNumber}</li>
-                        <li><strong>Condition:</strong> Used OEM (See Photos)</li>
+                        <li><strong>Model/ID:</strong> \${identifier}</li>
+                        <li><strong>Condition:</strong> \${condTitle} (See Photos)</li>
+                        \${statsHtml}
                     </ul>
-                3.  <h3>Vehicle Fitment</h3>
-                    \${compatibilityHtml}
+                3.  <h3>\${specTitle}</h3>
+                    \${supplementalHtml}
         \`;
     } else if (style === 'table-layout') {
         return \`
             \${commonInstructions}
-
-            **Description Generation (Table Layout HTML Format):**
-            *   The goal is a structured, technical look.
-            *   Wrap content in an <article> tag.
+            **Description Generation (Table Layout HTML):**
+            *   Structured, technical look.
             *   Structure:
                 1.  <h2>Title</h2>
-                2.  Create an HTML <table> with styling 'width:100%; border-collapse:collapse; margin-bottom:20px;'.
-                    Rows should have a light gray background for headers.
-                    Rows:
-                    *   <strong>Part Number</strong> | \${partNumber}
-                    *   <strong>Condition</strong> | Used OEM
-                    *   <strong>Warranty</strong> | See Policy Below
+                2.  HTML Table (width:100%):
+                    *   <strong>Model/SKU</strong> | \${identifier}
+                    *   <strong>Condition</strong> | \${condTitle}
                 3.  <h3>Detailed Description</h3>
-                    <p>[Analyze image and describe the item in 2-3 sentences]</p>
-                    <p><strong>Stock Note:</strong> Item is a genuine OEM part harvested from our rebuild projects.</p>
-                4.  <h3>Compatibility</h3>
-                    \${compatibilityHtml}
+                    <p>[Analyze image and describe item]</p>
+                    \${statsHtml ? \`<h3>Additional Info</h3>\${statsHtml}\` : ''}
+                4.  <h3>\${specTitle}</h3>
+                    \${supplementalHtml}
         \`;
     } else if (style === 'bold-classic') {
         return \`
             \${commonInstructions}
-
-            **Description Generation (Bold Classic HTML Format):**
-            *   Use a structured, high-contrast layout with horizontal rules.
-            *   Wrap content in an <article> tag.
+            **Description Generation (Bold Classic HTML):**
+            *   High-contrast, centered, horizontal rules.
             *   Structure:
-                1.  <h1 style="text-align: center; border-bottom: 2px solid #000; padding-bottom: 10px;">Title</h1>
-                2.  <div style="text-align: center; margin: 20px 0;">
-                        <span style="font-size: 1.2em; font-weight: bold;">Part Number: \${partNumber}</span>
-                    </div>
+                1.  <h1 style="text-align: center; border-bottom: 2px solid #000;">Title</h1>
+                2.  <div style="text-align: center; font-weight: bold;">ID: \${identifier}</div>
                 3.  <hr />
                 4.  <h3>Item Description</h3>
-                    <p>[Analyze image and describe the item]</p>
+                    <p>[Analyze image and describe item]</p>
+                    \${statsHtml ? \`<div style="background:#eee; padding:10px; margin:10px 0;"><strong>Stats:</strong> \${statsHtml}</div>\` : ''}
                 5.  <hr />
-                6.  <h3>Vehicle Fitment</h3>
-                    \${compatibilityHtml}
+                6.  <h3>\${specTitle}</h3>
+                    \${supplementalHtml}
         \`;
     } else if (style === 'modern-card') {
         return \`
             \${commonInstructions}
-
-            **Description Generation (Modern Card HTML Format):**
-            *   Create a contained, card-style look.
-            *   Wrap content in an <article style="border: 1px solid #e5e7eb; border-radius: 12px; overflow: hidden; font-family: sans-serif;">.
+            **Description Generation (Modern Card HTML):**
+            *   Boxed layout, gray headers.
             *   Structure:
-                1.  <div style="background-color: #f3f4f6; padding: 20px; border-bottom: 1px solid #e5e7eb;">
-                        <h2 style="margin: 0; color: #111827;">Title</h2>
-                        <p style="margin: 10px 0 0; color: #4b5563;">Part #: <strong>\${partNumber}</strong> | Condition: <strong>Used OEM</strong></p>
+                1.  <div style="background-color: #f3f4f6; padding: 20px;">
+                        <h2>Title</h2>
+                        <p>ID: <strong>\${identifier}</strong> | Condition: <strong>\${condTitle}</strong></p>
                     </div>
                 2.  <div style="padding: 20px;">
-                        <h3 style="color: #374151;">Details</h3>
-                        <p>[Analyze image and describe the item]</p>
-                        <h3 style="color: #374151; margin-top: 20px;">Fitment Data</h3>
-                        \${compatibilityHtml}
+                        <h3>Details</h3>
+                        <p>[Analyze image and describe item]</p>
+                        \${statsHtml ? \`<p><strong>Note:</strong> \${statsHtml}</p>\` : ''}
+                        <h3>\${specTitle}</h3>
+                        \${supplementalHtml}
+                    </div>
+        \`;
+    } else if (style === 'luxury') {
+        return \`
+            \${commonInstructions}
+            **Description Generation (Luxury / High-End HTML):**
+            *   Elegant, minimalist, serif fonts, high-end feel.
+            *   Structure:
+                1.  <div style="text-align: center; padding: 40px; border: 1px solid #e5e5e5; max-width: 800px; margin: 0 auto; font-family: Georgia, serif; color: #333;">
+                        <h2 style="text-transform: uppercase; letter-spacing: 3px; font-size: 24px; margin-bottom: 10px; font-weight: normal;">Title</h2>
+                        <div style="width: 40px; height: 1px; background: #000; margin: 20px auto;"></div>
+                        <p style="font-style: italic; color: #777; font-size: 0.9em;">ID: \${identifier} &bull; \${condTitle}</p>
+                        <div style="margin: 40px 0; line-height: 1.8; font-size: 1.1em;">
+                            [Description emphasizing quality, authenticity, and condition]
+                        </div>
+                        \${statsHtml ? \`<div style="border-top: 1px solid #eee; border-bottom: 1px solid #eee; padding: 15px 0; margin: 30px 0; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px;">\${statsHtml}</div>\` : ''}
+                        <h3 style="text-transform: uppercase; letter-spacing: 2px; font-size: 14px; margin-top: 40px; font-weight: normal;">\${specTitle}</h3>
+                        \${supplementalHtml}
+                    </div>
+        \`;
+    } else if (style === 'vintage') {
+        return \`
+            \${commonInstructions}
+            **Description Generation (Vintage / Retro HTML):**
+            *   Warm tones, typewriter font, nostalgic.
+            *   Structure:
+                1.  <div style="background-color: #fdf6e3; padding: 40px; border: 4px double #d2b48c; font-family: 'Courier New', Courier, monospace; color: #5b4636;">
+                        <h2 style="text-align: center; border-bottom: 1px dashed #d2b48c; padding-bottom: 20px; margin-bottom: 20px;">Title</h2>
+                        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 30px;">
+                            <span>ITEM ID: \${identifier}</span>
+                            <span>COND: \${condTitle}</span>
+                        </div>
+                        <div style="line-height: 1.6; text-align: justify;">
+                             [Description highlighting the era, patina, and vintage character]
+                        </div>
+                        \${statsHtml ? \`<div style="background: #eee8d5; padding: 15px; margin: 25px 0; border: 1px solid #d2b48c;"><strong>SPECIFICATIONS:</strong> \${statsHtml}</div>\` : ''}
+                        <h3 style="margin-top: 30px; text-decoration: underline;">\${specTitle}</h3>
+                        \${supplementalHtml}
+                    </div>
+        \`;
+    } else if (style === 'handmade') {
+        return \`
+            \${commonInstructions}
+            **Description Generation (Handmade / Artisan HTML):**
+            *   Clean, earthy, personal, maker-focused.
+            *   Structure:
+                1.  <div style="font-family: 'Verdana', sans-serif; color: #555; padding: 20px; border: 1px solid #eaeaea; border-radius: 8px;">
+                        <h2 style="color: #6b8e23; font-weight: normal; font-size: 26px;">Title</h2>
+                        <p style="color: #999; font-size: 0.85em; letter-spacing: 0.5px;">ID: \${identifier} | Artisan Quality</p>
+                        <div style="padding: 20px 0; line-height: 1.7;">
+                            [Description focusing on materials, craftsmanship, and unique details]
+                        </div>
+                        \${statsHtml ? \`<div style="background: #f8fcf0; padding: 15px; border-left: 4px solid #6b8e23; margin: 20px 0;">\${statsHtml}</div>\` : ''}
+                        <h3 style="color: #6b8e23; margin-top: 30px;">\${specTitle}</h3>
+                        \${supplementalHtml}
+                    </div>
+        \`;
+    } else if (style === 'collectible') {
+        return \`
+            \${commonInstructions}
+            **Description Generation (Collectible / Investment HTML):**
+            *   Clinical, grading-focused, authoritative.
+            *   Structure:
+                1.  <div style="border: 1px solid #333; background: #fff; font-family: Arial, sans-serif;">
+                        <div style="background: #111; color: #fff; padding: 10px 20px; font-weight: bold; letter-spacing: 1px;">
+                            COLLECTOR GRADE LISTING
+                        </div>
+                        <div style="padding: 30px;">
+                            <h2 style="margin-top: 0;">Title</h2>
+                            <table style="width: 100%; border-collapse: collapse; margin: 20px 0; border: 1px solid #ddd;">
+                                <tr style="background: #f5f5f5;"><td style="padding: 10px; border: 1px solid #ddd;"><strong>Catalog ID</strong></td><td style="padding: 10px; border: 1px solid #ddd;">\${identifier}</td></tr>
+                                <tr><td style="padding: 10px; border: 1px solid #ddd;"><strong>Condition Grade</strong></td><td style="padding: 10px; border: 1px solid #ddd;">\${condTitle}</td></tr>
+                            </table>
+                            <h3>Condition Report</h3>
+                            <p>[Rigorous analysis of condition, flaws, wear, and rarity]</p>
+                            \${statsHtml ? \`<p><strong>Attributes:</strong> \${statsHtml}</p>\` : ''}
+                            <h3>\${specTitle}</h3>
+                            \${supplementalHtml}
+                        </div>
                     </div>
         \`;
     } else {
-        // Professional (Default / LKQ Style)
+        // Professional (Default)
         return \`
             \${commonInstructions}
-
-            **Description Generation (Professional HTML Format):**
-            *   The entire description must be a single HTML string.
-            *   The root element must be an <article> tag.
-            *   Each major part MUST be wrapped in a <section> tag with style="margin-bottom: 1.5rem;".
+            **Description Generation (Professional HTML):**
+            *   Standard professional listing format.
             *   Structure:
-                a. **Header:** <h2>Title</h2>, <p><strong>Part Number:</strong> \${partNumber}</p>.
-                b. **Product Details:** <h3>Product Details</h3>. Analyze image for condition. State this is a Genuine OEM part.
-                c. **Compatibility:** <h3>Vehicle Compatibility</h3> \${compatibilityHtml}
+                a. **Header:** <h2>Title</h2>, <p><strong>ID:</strong> \${identifier}</p>.
+                b. **Product Details:** <h3>Product Details</h3>. Analyze image for condition. 
+                \${isElec ? 'Mention cosmetic condition of screen/casing explicitly.' : ''}
+                \${statsHtml ? \`c. **Notes:** <h3>Additional Information</h3> <p>\${statsHtml}</p>\` : ''}
+                d. **Specs:** <h3>\${specTitle}</h3> \${supplementalHtml}
         \`;
     }
 };
 
 export async function generateListingContent(
   partImageDataUrl: string,
-  partNumber: string,
-  compatibilityHtml: string,
+  identifier: string,
+  supplementalHtml: string,
   style: ListingStyle = 'professional',
   platform: Platform = 'ebay',
+  type: ScanType = 'auto-part',
   options?: ListingOptions
 ): Promise<{ title: string; description: string }> {
   const imagePart = imageDataUrlToGenerativePart(partImageDataUrl);
   
   let instructions = '';
+  let specLabel = 'Product Specs';
+  if (type === 'auto-part') specLabel = 'Vehicle Fitment';
+  if (type === 'electronics') specLabel = 'Tech Specs';
+  
+  // Construct Stats HTML
+  let statsHtml = '';
+  if (type === 'auto-part') {
+      if (options?.donorVehicleDetails) statsHtml += \`<strong>Donor Vehicle:</strong> \${options.donorVehicleDetails}<br/>\`;
+      if (options?.donorVin) statsHtml += \`<strong>VIN:</strong> \${options.donorVin}<br/>\`;
+      if (options?.mileage) statsHtml += \`<strong>Mileage:</strong> \${options.mileage}<br/>\`;
+  }
+  
+  // Handle condition formatting for FB/Craigslist
+  let conditionText = options?.condition || 'Used';
+  if (type === 'auto-part') conditionText = options?.condition || 'Used OEM';
+  if (type === 'electronics') conditionText = options?.condition || 'Used - Working';
+
+  if ((platform === 'facebook' || platform === 'craigslist') && conditionText.includes('Fair')) {
+      conditionText += ' (As Is)';
+  }
+
+  // ACES/PIES Context Inclusion
+  const acesPiesContext = options?.acesPiesData ? \`
+    **CRITICAL: RAW DATA PROVIDED**
+    The user has uploaded raw data (XML/CSV). Prioritize this data over image analysis.
+    
+    **Raw Data:**
+    \${options.acesPiesData}
+  \` : '';
 
   if (platform === 'facebook') {
     instructions = \`
-        *   Create a catchy, engaging title for Facebook Marketplace (use 1-2 emojis in title).
-        *   Include: Year range, Make, Model, Part name, Part number "\${partNumber}".
-        *   **Description Generation (Facebook Format - Plain Text):**
-        *   Use emojis (🔥, 🚗, ✅, ⚙️, 📦) to make it engaging and easy to read.
-        *   Do NOT use HTML tags. Return plain text with line breaks (\\n).
+        \${acesPiesContext}
+        *   Create a catchy, engaging title for Facebook Marketplace (use 1-2 emojis).
+        *   **Description Generation (Facebook - Plain Text):**
+        *   Use emojis (🔥, 📦, ✅). No HTML.
         *   Structure:
-            1.  **Header:** Part Name & Number
-            2.  **Price:** \${options?.price ? options.price : '[Enter Price]'}
-            3.  **Location:** \${options?.location ? options.location : '[Enter Location]'}
-            4.  **Condition:** \${options?.condition || 'Used OEM (Good Condition)'}
-            5.  **Description:** 2-3 short sentences about the part.
-            6.  **Fitment:** Convert the following HTML compatibility table into a CLEAN text list (Year Make Model) with bullet points.
-            7.  **Compatibility Data Source:** \${compatibilityHtml}
+            1.  **Header:** Item Name & ID
+            2.  **Price:** \${options?.price || '[Enter Price]'}
+            3.  **Location:** \${options?.location || '[Enter Location]'}
+            4.  **Condition:** \${conditionText}
+            5.  **Description:** 2-3 short sentences.
+            6.  **\${specLabel}:** Convert the HTML table below into a text list.
+            7.  **Data:** \${supplementalHtml}
+            \${type === 'auto-part' && options?.donorVin ? \`8. **Donor VIN:** \${options.donorVin}\` : ''}
     \`;
   } else if (platform === 'craigslist') {
     instructions = \`
-        *   Create a clear, descriptive, professional title for Craigslist.
-        *   **Description Generation (Craigslist Format - Plain Text):**
-        *   Clean, professional text. Minimal or no emojis.
-        *   Do NOT use HTML tags. Return plain text with line breaks (\\n).
+        \${acesPiesContext}
+        *   Create a clear, professional title for Craigslist.
+        *   **Description Generation (Craigslist - Plain Text):**
+        *   Clean text. No HTML.
         *   Structure:
-            1.  **Part:** Part Name & Number \${partNumber}
-            2.  **Price:** \${options?.price ? options.price : '[Enter Price]'}
-            3.  **Location:** \${options?.location ? options.location : '[Enter Location]'}
-            4.  **Condition:** \${options?.condition || 'Used OEM'}
+            1.  **Item:** Name & ID \${identifier}
+            2.  **Price:** \${options?.price || '[Enter Price]'}
+            3.  **Location:** \${options?.location || '[Enter Location]'}
+            4.  **Condition:** \${conditionText}
             5.  **Description:** Detailed description of the item.
-            6.  **Fitment:** Convert the following HTML compatibility table into a structured text list.
-            7.  **Compatibility Data Source:** \${compatibilityHtml}
+            6.  **\${specLabel}:** Convert the HTML table below into a structured text list.
+            7.  **Data:** \${supplementalHtml}
+            \${type === 'auto-part' && options?.donorVin ? \`8. **Donor VIN:** \${options.donorVin}\` : ''}
     \`;
   } else {
     // eBay (HTML)
-    instructions = getStyleInstruction(style, partNumber, compatibilityHtml);
+    instructions = \`
+        \${acesPiesContext}
+        \${getStyleInstruction(style, identifier, supplementalHtml, type, statsHtml)}
+        \${type === 'auto-part' && options?.donorVehicleDetails ? \`*   **Donor Vehicle Identified:** \${options.donorVehicleDetails}. Use this to ensure title accuracy (Year/Make/Model).\` : ''}
+        \${type === 'electronics' ? '*   **Electronics Note:** Emphasize that serial numbers are recorded for fraud prevention.' : ''}
+    \`;
   }
 
   const prompt = \`
-    You are an expert copywriter for ChrisJayden Auto Repair, a professional auto parts seller.
-    Based on the provided part number "\${partNumber}" and the attached image of a used auto part, generate a listing in JSON format.
-
+    You are an expert copywriter and catalog manager.
+    Based on the provided identifier "\${identifier}" and the attached image, generate a listing in JSON format.
+    
     \${instructions}
 
     Your response MUST be a single, valid JSON object with two keys: "title" and "description".
@@ -291,7 +547,7 @@ export async function generateListingContent(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: { parts: [imagePart, { text: prompt }] },
       config: {
         responseMimeType: "application/json",
@@ -318,859 +574,7 @@ export async function generateListingContent(
     }
     throw new Error(\`Failed to generate listing. \${error instanceof Error ? error.message : "An unknown AI error occurred."}\`);
   }
-}`,
-  'components/ResultCard.tsx': `import React, { useState } from 'react';
-import { Platform } from '../services/geminiService';
-
-interface ResultCardProps {
-  title: string;
-  description: string;
-  platform?: Platform;
-}
-
-const DownloadIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-    </svg>
-);
-
-const CodeIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-    </svg>
-);
-
-// Static footer content for consistent branding and policies
-const STATIC_FOOTER_HTML = \`
-<hr style="margin: 2rem 0; border-color: #e5e7eb;" />
-
-<section style="margin-bottom: 1.5rem;">
-  <h3>CRITICAL: Buyer Responsibility & Fitment</h3>
-  <p>Please verify compatibility before purchasing. While we guarantee the quality of our OEM parts, it is the buyer's sole responsibility to ensure this specific part fits your exact vehicle year, make, model, and trim level. Please cross-reference part numbers, check your vehicle’s VIN, or consult your local dealer to confirm fitment before you commit to buy.</p>
-</section>
-
-<section style="margin-bottom: 1.5rem;">
-  <h3>Shipping & Return Policy</h3>
-  <p><strong>Shipping:</strong> The buyer is responsible for all shipping costs associated with this item.</p>
-  <p><strong>Returns:</strong> We stand behind the accuracy of our listings. If you receive an item that is not as described, returns are accepted within 15 days of receipt. Please review all listing photos and descriptions carefully prior to purchase.</p>
-</section>
-
-<section style="margin-bottom: 1.5rem;">
-  <h3>About ChrisJayden Auto Repair: The Source for Genuine OEM Parts</h3>
-  <p>At ChrisJayden Auto Repair, our business is built on hands-on automotive experience. Based physically in Oklahoma City, we specialize in the meticulous process of acquiring salvage vehicles and performing complete quality rebuilds.</p>
-  <p>This specialized work gives us unique access to a massive assortment of pristine Original Equipment Manufacturer (OEM) parts that are far too good to go to waste. We harvest the best components—the very kind we trust in our own rebuild projects—and make them available to you. Skip the aftermarket guessing game and choose genuine OEM parts sourced by experienced rebuilders.</p>
-</section>
-\`;
-
-const STATIC_FOOTER_TEXT = \`
---------------------------------------------------
-CRITICAL: Buyer Responsibility & Fitment
-Please verify compatibility before purchasing. It is the buyer's sole responsibility to ensure this specific part fits your exact vehicle. Please check your part number or VIN.
-
-Shipping & Return Policy
-Shipping: Buyer pays shipping.
-Returns: Accepted within 15 days if not as described.
-
-About ChrisJayden Auto Repair
-We are an Oklahoma City based rebuilder specializing in genuine OEM parts harvested from our quality rebuild projects. Buy with confidence.
-\`;
-
-export const ResultCard: React.FC<ResultCardProps> = ({ title, description, platform = 'ebay' }) => {
-  const [copied, setCopied] = useState(false);
-  const [htmlCopied, setHtmlCopied] = useState(false);
-
-  const isHtml = platform === 'ebay';
-
-  // Check if description already contains the branding to avoid duplication (for backward compatibility with old scans)
-  const hasBranding = description.includes("ChrisJayden Auto Repair");
-  const fullDescription = hasBranding 
-    ? description 
-    : description + (isHtml ? STATIC_FOOTER_HTML : STATIC_FOOTER_TEXT);
-
-  // Strip HTML tags for the text-only copy
-  const getTextContent = (html: string) => {
-    const tempDiv = document.createElement("div");
-    tempDiv.innerHTML = html;
-    return tempDiv.innerText;
-  };
-
-  const handleCopy = () => {
-    const textBody = isHtml ? getTextContent(fullDescription) : fullDescription;
-    navigator.clipboard.writeText(\`Title:\n\${title}\n\nDescription:\n\${textBody}\`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleCopyHtml = () => {
-    if (!isHtml) return;
-    navigator.clipboard.writeText(fullDescription);
-    setHtmlCopied(true);
-    setTimeout(() => setHtmlCopied(false), 2000);
-  };
-
-  const handleDownload = () => {
-    const textBody = isHtml ? getTextContent(fullDescription) : fullDescription;
-    const fileContent = \`Title:\n\${title}\n\n\${isHtml ? 'Description HTML:\n' + fullDescription + '\\n\\n' : ''}Description Text:\n\${textBody}\`;
-    const blob = new Blob([fileContent], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = \`\${platform}-listing.txt\`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  return (
-    <div className="bg-gray-800/50 backdrop-blur-sm rounded-xl shadow-2xl p-4 md:p-6 border border-gray-700">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 sm:gap-2">
-        <h2 className="text-xl md:text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-300 capitalize">
-          Generated {platform === 'ebay' ? 'eBay' : platform} Listing
-        </h2>
-        <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
-          {isHtml && (
-            <button
-                onClick={handleCopyHtml}
-                className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-purple-600 rounded-lg hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-purple-500 transition-colors"
-            >
-                <span>{htmlCopied ? 'Copied!' : 'Copy HTML'}</span>
-                <CodeIcon />
-            </button>
-          )}
-          
-          <button
-            onClick={handleCopy}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors"
-          >
-            <span>{copied ? 'Copied!' : isHtml ? 'Copy All' : 'Copy Text'}</span>
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
-          
-           <button
-            onClick={handleDownload}
-            className="w-full sm:w-auto flex items-center justify-center space-x-2 px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-green-500 transition-colors"
-          >
-            <span>Download</span>
-            <DownloadIcon />
-          </button>
-        </div>
-      </div>
-
-      <div className="space-y-6 mt-4">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-300">Title</h3>
-          <p className="mt-1 p-3 bg-gray-900 rounded-md text-gray-200 shadow-inner border border-gray-700/50">{title}</p>
-        </div>
-        <div>
-          <h3 className="text-lg font-semibold text-gray-300 mb-2">Description Preview</h3>
-          <div className="p-6 bg-gray-900 rounded-xl shadow-inner border border-gray-700/50">
-            {isHtml ? (
-                <>
-                    <article 
-                        className="prose prose-invert prose-sm sm:prose-base max-w-none 
-                                    leading-loose 
-                                    prose-headings:text-gray-100 prose-headings:mt-8 prose-headings:mb-4 
-                                    prose-p:text-gray-300 prose-p:my-4 
-                                    prose-li:my-2 prose-ul:my-4
-                                    prose-strong:text-white prose-strong:font-bold
-                                    prose-a:text-blue-400
-                                    prose-table:w-full prose-table:my-6 prose-th:bg-gray-800 prose-th:p-3 prose-td:p-3"
-                        dangerouslySetInnerHTML={{ __html: description }}
-                    />
-                    {!hasBranding && (
-                        <div className="mt-8 pt-8 border-t border-gray-700">
-                            <article 
-                                className="prose prose-invert prose-sm sm:prose-base max-w-none 
-                                        leading-loose 
-                                        prose-headings:text-gray-100 prose-headings:mt-6 prose-headings:mb-4
-                                        prose-p:text-gray-400 prose-p:my-4"
-                                dangerouslySetInnerHTML={{ __html: STATIC_FOOTER_HTML }}
-                            />
-                        </div>
-                    )}
-                </>
-            ) : (
-                <div className="text-gray-300 font-sans text-sm sm:text-base leading-relaxed whitespace-pre-wrap">
-                    {description}
-                    {!hasBranding && (
-                        <div className="mt-8 pt-8 border-t border-gray-700 text-gray-400">
-                            {STATIC_FOOTER_TEXT}
-                        </div>
-                    )}
-                </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};`,
-  'components/NotepadSidebar.tsx': `import React, { useState, useEffect } from 'react';
-
-interface NotepadSidebarProps {
-  isOpen: boolean;
-  onClose: () => void;
-  currentListing: { title: string; description: string } | null;
-}
-
-export const NotepadSidebar: React.FC<NotepadSidebarProps> = ({ isOpen, onClose, currentListing }) => {
-  const [content, setContent] = useState('');
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied'>('idle');
-
-  // Load from localStorage on mount
-  useEffect(() => {
-    const savedNote = localStorage.getItem('rapid_listing_notepad');
-    if (savedNote) {
-      setContent(savedNote);
-    }
-  }, []);
-
-  // Save to localStorage whenever content changes
-  useEffect(() => {
-    localStorage.setItem('rapid_listing_notepad', content);
-  }, [content]);
-
-  const handleImport = () => {
-    if (!currentListing) return;
-    const newContent = \`TITLE:\n\${currentListing.title}\n\nDESCRIPTION HTML:\n\${currentListing.description}\n\n-------------------\n\n\${content}\`;
-    setContent(newContent);
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
-    setCopyStatus('copied');
-    setTimeout(() => setCopyStatus('idle'), 2000);
-  };
-
-  const handleClear = () => {
-    if (window.confirm("Are you sure you want to clear the notepad?")) {
-      setContent('');
-    }
-  };
-
-  return (
-    <div
-      className={\`fixed inset-y-0 right-0 w-full sm:w-[30rem] bg-gray-900 border-l border-gray-800 shadow-2xl transform transition-transform duration-300 ease-in-out z-[60] flex flex-col \${
-        isOpen ? 'translate-x-0' : 'translate-x-full'
-      }\`}
-    >
-      {/* Header */}
-      <div className="p-4 border-b border-gray-800 flex justify-between items-center bg-gray-900/95 backdrop-blur-sm">
-        <h2 className="text-xl font-bold text-white flex items-center">
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-          </svg>
-          Notepad
-        </h2>
-        <button
-          onClick={onClose}
-          className="text-gray-400 hover:text-white transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Toolbar */}
-      <div className="p-3 grid grid-cols-3 gap-2 bg-gray-800/50">
-        <button
-            onClick={handleImport}
-            disabled={!currentListing}
-            className={\`text-xs font-semibold py-2 px-2 rounded border transition-colors flex items-center justify-center gap-1
-                \${!currentListing 
-                    ? 'bg-gray-800 text-gray-600 border-gray-700 cursor-not-allowed' 
-                    : 'bg-gray-700 text-cyan-300 border-gray-600 hover:bg-gray-600 hover:text-cyan-200'}\`}
-            title="Append current scan results to note"
-        >
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            Import Current
-        </button>
-        <button
-            onClick={handleCopy}
-            className={\`text-xs font-semibold py-2 px-2 rounded border transition-colors flex items-center justify-center gap-1
-                \${copyStatus === 'copied'
-                    ? 'bg-green-900/30 border-green-500 text-green-400'
-                    : 'bg-gray-700 text-gray-300 border-gray-600 hover:bg-gray-600 hover:text-white'}\`}
-        >
-            {copyStatus === 'copied' ? 'Copied!' : 'Copy All'}
-        </button>
-        <button
-            onClick={handleClear}
-            className="text-xs font-semibold py-2 px-2 rounded border bg-gray-700 text-gray-400 border-gray-600 hover:bg-red-900/30 hover:text-red-400 hover:border-red-900/50 transition-colors"
-        >
-            Clear
-        </button>
-      </div>
-
-      {/* Editor Area */}
-      <div className="flex-grow p-0 relative">
-        <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            className="w-full h-full bg-gray-950 text-gray-300 p-4 font-mono text-sm resize-none focus:outline-none focus:ring-inset focus:ring-2 focus:ring-cyan-500/30"
-            placeholder="Use this space to refine descriptions, store HTML snippets, or keep notes. Your text is saved automatically."
-            spellCheck={false}
-        />
-      </div>
-      
-      <div className="p-2 bg-gray-900 border-t border-gray-800 text-center">
-         <p className="text-[10px] text-gray-600 uppercase tracking-wider">Auto-Save Enabled</p>
-      </div>
-    </div>
-  );
-};`,
-  'components/Logo.tsx': `import React from 'react';
-export const Logo = ({ className = "h-12 w-12" }: { className?: string }) => (
-  <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
-    <defs>
-      <linearGradient id="mindBendingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stopColor="#d946ef" />
-        <stop offset="50%" stopColor="#8b5cf6" />
-        <stop offset="100%" stopColor="#06b6d4" />
-      </linearGradient>
-      <filter id="glow"><feGaussianBlur stdDeviation="2.5" result="coloredBlur"/><feMerge><feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-    </defs>
-    <g filter="url(#glow)">
-      <path d="M50 5 L93.3 30 V80 L50 105 L6.7 80 V30 Z" stroke="url(#mindBendingGradient)" strokeWidth="4" className="origin-center animate-[spin_10s_linear_infinite]" strokeLinecap="round"/>
-      <path d="M30 40 L70 40 M20 50 L80 50 M30 60 L70 60" stroke="url(#mindBendingGradient)" strokeWidth="3" strokeLinecap="round" className="opacity-80"/>
-      <path d="M40 25 V75 M40 25 H60 C75 25 75 50 60 50 H40 M60 50 L75 75" stroke="white" strokeWidth="6" strokeLinecap="round" strokeLinejoin="round"/>
-    </g>
-  </svg>
-);`,
-  'App.tsx': `import React, { useState, useCallback, useEffect } from 'react';
-import { ImageUploader } from './components/ImageUploader';
-import { ResultCard } from './components/ResultCard';
-import { Spinner } from './components/Spinner';
-import { extractPartNumberFromImage, generateListingContent, getCompatibilityData, ListingStyle, Platform } from './services/geminiService';
-import { fileToBase64 } from './utils/fileUtils';
-import { CompatibilityCard } from './components/CompatibilityCard';
-import { ReplitSetupModal } from './components/ReplitSetupModal';
-import { Logo } from './components/Logo';
-import { HistorySidebar, SavedScan, SavedDraft } from './components/HistorySidebar';
-import { NotepadSidebar } from './components/NotepadSidebar';
-
-// Helper to convert base64 back to file for state restoration
-const base64ToFile = async (base64: string, fileName: string): Promise<File> => {
-  const res = await fetch(base64);
-  const blob = await res.blob();
-  return new File([blob], fileName, { type: blob.type });
-};
-
-export default function App() {
-  const [partImage, setPartImage] = useState<{ file: File; base64: string } | null>(null);
-  const [serialImage, setSerialImage] = useState<{ file: File; base64: string } | null>(null);
-  const [listing, setListing] = useState<{ title: string; description: string } | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentStep, setCurrentStep] = useState('');
-  const [error, setError] = useState<string | null>(null);
-
-  const [manualPartNumber, setManualPartNumber] = useState('');
-  const [compatibilityData, setCompatibilityData] = useState<string | null>(null);
-  const [isCompatibilityLoading, setIsCompatibilityLoading] = useState(false);
-  const [compatibilityError, setCompatibilityError] = useState<string | null>(null);
-  const [isReplitModalOpen, setIsReplitModalOpen] = useState(false);
-
-  // History & Draft State
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [savedScans, setSavedScans] = useState<SavedScan[]>([]);
-  const [savedDrafts, setSavedDrafts] = useState<SavedDraft[]>([]);
-
-  // Notepad State
-  const [isNotepadOpen, setIsNotepadOpen] = useState(false);
-  
-  // Settings State
-  const [listingStyle, setListingStyle] = useState<ListingStyle>('professional');
-  const [platform, setPlatform] = useState<Platform>('ebay');
-
-  // FB/Craigslist Options
-  const [price, setPrice] = useState('');
-  const [location, setLocation] = useState('');
-  const [condition, setCondition] = useState('Used - Good');
-
-  // Load history and drafts from localStorage on mount
-  useEffect(() => {
-    try {
-      const storedHistory = localStorage.getItem('rapid_listing_history');
-      if (storedHistory) {
-        setSavedScans(JSON.parse(storedHistory));
-      }
-      const storedDrafts = localStorage.getItem('rapid_listing_drafts');
-      if (storedDrafts) {
-        setSavedDrafts(JSON.parse(storedDrafts));
-      }
-    } catch (e) {
-      console.error("Failed to load local storage data", e);
-    }
-  }, []);
-
-  const saveToHistory = (newScan: SavedScan) => {
-    const updatedScans = [newScan, ...savedScans].slice(0, 50); // Keep last 50
-    setSavedScans(updatedScans);
-    localStorage.setItem('rapid_listing_history', JSON.stringify(updatedScans));
-  };
-
-  const deleteScan = (id: string) => {
-    const updatedScans = savedScans.filter(s => s.id !== id);
-    setSavedScans(updatedScans);
-    localStorage.setItem('rapid_listing_history', JSON.stringify(updatedScans));
-  };
-
-  const handleSaveDraft = () => {
-    if (!partImage && !serialImage && !manualPartNumber) {
-      setError("Cannot save an empty draft. Please upload images or enter a part number.");
-      return;
-    }
-
-    try {
-      const newDraft: SavedDraft = {
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        // partImageBase64: partImage?.base64, // Images removed to save storage space
-        // serialImageBase64: serialImage?.base64,
-        partNumber: manualPartNumber,
-      };
-
-      const updatedDrafts = [newDraft, ...savedDrafts].slice(0, 10); // Limit to 10 drafts to save space
-      setSavedDrafts(updatedDrafts);
-      localStorage.setItem('rapid_listing_drafts', JSON.stringify(updatedDrafts));
-      
-      // Visual feedback
-      setIsHistoryOpen(true);
-    } catch (e) {
-      setError("Storage limit reached. Please delete old drafts or history items.");
-    }
-  };
-
-  const deleteDraft = (id: string) => {
-    const updatedDrafts = savedDrafts.filter(d => d.id !== id);
-    setSavedDrafts(updatedDrafts);
-    localStorage.setItem('rapid_listing_drafts', JSON.stringify(updatedDrafts));
-  };
-
-  const loadScan = (scan: SavedScan) => {
-    setListing({ title: scan.title, description: scan.description });
-    setCompatibilityData(scan.compatibilityHtml);
-    setManualPartNumber(scan.partNumber);
-    // Set platform if available in history, otherwise default to ebay
-    setPlatform(scan.platform || 'ebay');
-    
-    // Reset images/errors when loading from history
-    setPartImage(null);
-    setSerialImage(null);
-    setError(null);
-    setCompatibilityError(null);
-    // Scroll to results
-    setTimeout(() => {
-        window.scrollTo({ top: document.body.scrollHeight / 2, behavior: 'smooth' });
-    }, 100);
-  };
-
-  const loadDraft = async (draft: SavedDraft) => {
-    setIsLoading(true); // Show loading state while processing images
-    try {
-      setManualPartNumber(draft.partNumber || '');
-      setListing(null);
-      setCompatibilityData(null);
-      setError(null);
-
-      // Drafts now only store text, so we clear images and prompt user
-      setPartImage(null);
-      setSerialImage(null);
-      
-      setIsHistoryOpen(false);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      setError("Draft loaded. Please re-upload your images (images are not saved to save space).");
-    } catch (e) {
-      setError("Failed to restore draft.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-  
-  const handleImageUpload = useCallback(async (file: File, type: 'part' | 'serial') => {
-    try {
-      const base64 = await fileToBase64(file);
-      if (type === 'part') {
-        setPartImage({ file, base64 });
-      } else {
-        setSerialImage({ file, base64 });
-      }
-    } catch (err) {
-      setError('Failed to process image. Please try another file.');
-    }
-  }, []);
-
-  const handleGenerateListing = async () => {
-    if (!partImage || !serialImage) {
-      setError('Please upload both a part image and a serial number image.');
-      return;
-    }
-
-    setIsLoading(true);
-    setError(null);
-    setListing(null);
-    setCompatibilityData(null);
-    setCompatibilityError(null);
-
-    try {
-      setCurrentStep('Extracting part number from image...');
-      const partNumber = await extractPartNumberFromImage(serialImage.base64);
-
-      if (!partNumber || partNumber.trim() === '') {
-        throw new Error("Could not extract a part number from the image. Please try a clearer picture.");
-      }
-      
-      setCurrentStep(\`Part number "\${partNumber}" found. Researching vehicle compatibility...\`);
-      const compatibilityHtml = await getCompatibilityData(partNumber);
-      
-      setCurrentStep(\`Generating \${platform === 'ebay' ? 'eBay HTML' : platform === 'facebook' ? 'Facebook' : 'Craigslist'} listing...\`);
-      
-      const generatedListing = await generateListingContent(
-          partImage.base64, 
-          partNumber, 
-          compatibilityHtml, 
-          listingStyle, 
-          platform,
-          { price, location, condition }
-      );
-
-      setListing(generatedListing);
-      setCompatibilityData(compatibilityHtml);
-
-      // Auto-save to history
-      saveToHistory({
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-        partNumber: partNumber,
-        title: generatedListing.title,
-        description: generatedListing.description,
-        compatibilityHtml: compatibilityHtml,
-        platform: platform
-      });
-
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setError(\`Generation failed: \${errorMessage}\`);
-    } finally {
-      setIsLoading(false);
-      setCurrentStep('');
-    }
-  };
-
-  const handleLookupCompatibility = async () => {
-    if (!manualPartNumber.trim()) {
-      setCompatibilityError('Please enter a part number.');
-      return;
-    }
-    setIsCompatibilityLoading(true);
-    setCompatibilityError(null);
-    setCompatibilityData(null);
-    setListing(null);
-    setError(null);
-
-    try {
-      const data = await getCompatibilityData(manualPartNumber);
-      setCompatibilityData(data);
-    } catch (err: unknown) {
-      const errorMessage = err instanceof Error ? err.message : 'An unknown error occurred.';
-      setCompatibilityError(\`Lookup failed: \${errorMessage}\`);
-    } finally {
-      setIsCompatibilityLoading(false);
-    }
-  };
-
-
-  const isGenerateButtonDisabled = !partImage || !serialImage || isLoading;
-
-  return (
-    <div className="min-h-screen bg-gray-950 text-gray-100 flex flex-col items-center relative overflow-x-hidden">
-      {/* Background Ambience */}
-      <div className="absolute top-0 left-0 w-full h-96 bg-gradient-to-b from-gray-900 to-gray-950 z-0"></div>
-      <div className="absolute top-[-10%] right-[-5%] w-96 h-96 bg-fuchsia-600/20 rounded-full blur-3xl pointer-events-none"></div>
-      <div className="absolute top-[10%] left-[-10%] w-96 h-96 bg-cyan-600/10 rounded-full blur-3xl pointer-events-none"></div>
-
-      {/* Navigation Bar */}
-      <nav className="w-full z-10 border-b border-gray-800 bg-gray-900/50 backdrop-blur-md sticky top-0">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex items-center justify-between h-16">
-                <div className="flex items-center gap-3">
-                    <Logo className="h-10 w-10" />
-                    <span className="text-xl font-bold tracking-tight text-white">
-                        Rapid<span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-400">Listing</span>Tool.com
-                    </span>
-                </div>
-                <div className="flex items-center gap-4">
-                    <button 
-                        onClick={() => setIsNotepadOpen(true)}
-                        className="text-gray-300 hover:text-white text-sm font-medium transition-colors flex items-center gap-2"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                        </svg>
-                        <span className="hidden sm:inline">Notepad</span>
-                    </button>
-                    <button 
-                        onClick={() => setIsHistoryOpen(true)}
-                        className="text-gray-300 hover:text-white text-sm font-medium transition-colors flex items-center gap-2"
-                    >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-fuchsia-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <span className="hidden sm:inline">History ({savedScans.length})</span>
-                    </button>
-                </div>
-            </div>
-        </div>
-      </nav>
-
-      <div className="w-full max-w-5xl mx-auto flex flex-col flex-grow px-4 py-8 z-10">
-        
-        <header className="text-center mb-10">
-          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white mb-4">
-            Automate Your <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 via-purple-500 to-fuchsia-500 animate-pulse">Auto Parts</span>
-          </h1>
-          <p className="text-lg text-gray-400 max-w-2xl mx-auto">
-            Upload photos, extract ACES/PIES data, and generate listings for eBay, Facebook Marketplace, or Craigslist in seconds.
-          </p>
-        </header>
-
-        <main className="flex-grow w-full">
-          <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50 mb-12">
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 mb-6">
-              <ImageUploader 
-                id="part-image" 
-                label="Step 1: Part Photo" 
-                onImageUpload={(file) => handleImageUpload(file, 'part')} 
-                imagePreviewUrl={partImage ? URL.createObjectURL(partImage.file) : null}
-                onClearImage={() => setPartImage(null)}
-              />
-              <ImageUploader 
-                id="serial-image" 
-                label="Step 2: Serial # Photo" 
-                onImageUpload={(file) => handleImageUpload(file, 'serial')} 
-                imagePreviewUrl={serialImage ? URL.createObjectURL(serialImage.file) : null}
-                onClearImage={() => setSerialImage(null)}
-              />
-            </div>
-
-            {error && (
-              <div className="mb-6 p-4 bg-red-900/30 border border-red-700/50 text-red-200 rounded-lg text-sm text-center animate-bounce-in">
-                {error}
-              </div>
-            )}
-
-            {isLoading ? (
-              <div className="flex flex-col items-center justify-center py-8 space-y-4">
-                <Spinner className="h-12 w-12 text-fuchsia-500" />
-                <p className="text-lg font-medium text-gray-300 animate-pulse">{currentStep}</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                  {/* Platform Selector */}
-                  <div className="flex justify-center mb-6">
-                      <div className="bg-gray-800 p-1 rounded-lg inline-flex shadow-lg border border-gray-700">
-                        <button
-                          onClick={() => setPlatform('ebay')}
-                          className={\`px-6 py-2 rounded-md text-sm font-medium transition-all \${
-                            platform === 'ebay'
-                              ? 'bg-blue-600 text-white shadow-md'
-                              : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                          }\`}
-                        >
-                          eBay (HTML)
-                        </button>
-                        <button
-                          onClick={() => setPlatform('facebook')}
-                          className={\`px-6 py-2 rounded-md text-sm font-medium transition-all \${
-                            platform === 'facebook'
-                              ? 'bg-blue-600 text-white shadow-md'
-                              : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                          }\`}
-                        >
-                          Facebook
-                        </button>
-                        <button
-                          onClick={() => setPlatform('craigslist')}
-                          className={\`px-6 py-2 rounded-md text-sm font-medium transition-all \${
-                            platform === 'craigslist'
-                              ? 'bg-blue-600 text-white shadow-md'
-                              : 'text-gray-400 hover:text-white hover:bg-gray-700'
-                          }\`}
-                        >
-                          Craigslist
-                        </button>
-                      </div>
-                  </div>
-
-                  {/* Settings Row - Only show Templates for eBay */}
-                  {platform === 'ebay' && (
-                      <div className="flex items-center justify-end gap-4 mb-2 animate-fade-in">
-                        <label htmlFor="listing-style" className="text-sm font-medium text-gray-400">Template:</label>
-                        <select
-                            id="listing-style"
-                            value={listingStyle}
-                            onChange={(e) => setListingStyle(e.target.value as ListingStyle)}
-                            className="bg-gray-800 border border-gray-600 text-white text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
-                        >
-                            <option value="professional">Professional (Standard)</option>
-                            <option value="minimalist">Minimalist (Mobile Friendly)</option>
-                            <option value="table-layout">Table Layout (Structured)</option>
-                            <option value="bold-classic">Bold Classic (High Contrast)</option>
-                            <option value="modern-card">Modern Card (Boxed Layout)</option>
-                        </select>
-                      </div>
-                  )}
-
-                  {/* Additional Fields for Facebook / Craigslist */}
-                  {platform !== 'ebay' && (
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6 animate-fade-in bg-gray-800/50 p-4 rounded-xl border border-gray-700">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-1">Price</label>
-                            <input 
-                                type="text" 
-                                value={price} 
-                                onChange={(e) => setPrice(e.target.value)} 
-                                placeholder="$0.00" 
-                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-1">Location</label>
-                            <input 
-                                type="text" 
-                                value={location} 
-                                onChange={(e) => setLocation(e.target.value)} 
-                                placeholder="City, Zip" 
-                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-400 mb-1">Condition</label>
-                            <select 
-                                value={condition} 
-                                onChange={(e) => setCondition(e.target.value)} 
-                                className="w-full bg-gray-900 border border-gray-600 text-white px-3 py-2 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                            >
-                                <option>Used - Like New</option>
-                                <option>Used - Good</option>
-                                <option>Used - Fair</option>
-                                <option>For Parts / Salvage</option>
-                            </select>
-                        </div>
-                    </div>
-                  )}
-                  
-                  <div className="flex gap-3">
-                    <button
-                        onClick={handleSaveDraft}
-                        className="flex-1 bg-gray-700 hover:bg-gray-600 text-white py-3 rounded-lg font-semibold transition-all duration-200 border border-gray-600 transform hover:scale-[1.02] active:scale-95"
-                    >
-                        Save Draft
-                    </button>
-                    <button
-                        onClick={handleGenerateListing}
-                        disabled={isGenerateButtonDisabled}
-                        className={\`flex-[2] py-3 px-6 rounded-lg font-bold text-lg transition-all duration-200 transform hover:scale-[1.02] active:scale-95 shadow-lg shadow-blue-900/20
-                        \${isGenerateButtonDisabled 
-                            ? 'bg-gray-800 text-gray-500 cursor-not-allowed' 
-                            : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white'
-                        }\`}
-                    >
-                        GENERATE LISTING
-                    </button>
-                  </div>
-              </div>
-            )}
-          </div>
-
-          {listing && (
-             <div className="mb-12 animate-fade-in-up">
-               <ResultCard title={listing.title} description={listing.description} platform={platform} />
-             </div>
-          )}
-
-          <div className="glass-panel rounded-2xl shadow-2xl p-6 md:p-8 border border-gray-700/50">
-             <h2 className="text-2xl font-bold text-white mb-4 flex items-center gap-2">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                </svg>
-                Manual Fitment Check
-             </h2>
-             <p className="text-gray-400 mb-4 text-sm">
-                Enter a part number manually to check vehicle compatibility without generating a full listing.
-             </p>
-             <div className="flex flex-col md:flex-row gap-4">
-                <input 
-                  type="text" 
-                  value={manualPartNumber}
-                  onChange={(e) => setManualPartNumber(e.target.value)}
-                  placeholder="Enter Part Number (e.g. 89661-02K30)"
-                  className="flex-grow bg-gray-900 border border-gray-700 text-white px-4 py-3 rounded-lg focus:ring-2 focus:ring-blue-500 focus:outline-none placeholder-gray-600"
-                />
-                <button 
-                  onClick={handleLookupCompatibility}
-                  disabled={isCompatibilityLoading}
-                  className="bg-gray-700 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors whitespace-nowrap border border-gray-600"
-                >
-                  {isCompatibilityLoading ? 'Searching...' : 'Check Fitment'}
-                </button>
-             </div>
-             {compatibilityError && (
-                <div className="mt-4 p-3 bg-red-900/20 border border-red-800 text-red-300 rounded-md text-sm">
-                    {compatibilityError}
-                </div>
-             )}
-             {compatibilityData && (
-                <div className="mt-6 animate-fade-in">
-                    <CompatibilityCard partNumber={manualPartNumber} compatibilityHtml={compatibilityData} />
-                </div>
-             )}
-          </div>
-
-        </main>
-
-        <footer className="w-full text-center py-8 mt-8 border-t border-gray-800">
-            <p className="text-gray-500 text-sm">
-                &copy; {new Date().getFullYear()} RapidListingTool.com. All rights reserved.
-            </p>
-            <button 
-                onClick={() => setIsReplitModalOpen(true)} 
-                className="mt-2 text-xs text-gray-700 hover:text-gray-500 transition-colors"
-            >
-                Download Source Code
-            </button>
-        </footer>
-      </div>
-
-      {/* Sidebars & Modals */}
-      <HistorySidebar 
-        isOpen={isHistoryOpen} 
-        onClose={() => setIsHistoryOpen(false)} 
-        scans={savedScans} 
-        drafts={savedDrafts}
-        onLoadScan={loadScan} 
-        onDeleteScan={deleteScan} 
-        onLoadDraft={loadDraft}
-        onDeleteDraft={deleteDraft}
-      />
-      
-      <NotepadSidebar 
-        isOpen={isNotepadOpen} 
-        onClose={() => setIsNotepadOpen(false)} 
-        currentListing={listing} 
-      />
-
-      {isReplitModalOpen && <ReplitSetupModal onClose={() => setIsReplitModalOpen(false)} />}
-    </div>
-  );
-}`,
+}`
 };
 
 interface FileContentDisplayerProps {
@@ -1185,38 +589,96 @@ const FileContentDisplayer: React.FC<FileContentDisplayerProps> = ({ content }) 
         setTimeout(() => setCopied(false), 2000);
     };
     return (
-        <div className="relative bg-gray-900 rounded-lg mt-2">
-            <button onClick={handleCopy} className="absolute top-2 right-2 px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">{copied ? 'Copied!' : 'Copy'}</button>
-            <pre className="p-4 overflow-auto text-sm text-gray-300" style={{ maxHeight: '50vh' }}><code>{content}</code></pre>
+        <div className="relative bg-gray-900 rounded-lg mt-2 group">
+            <button 
+                onClick={handleCopy} 
+                className="absolute top-2 right-2 px-3 py-1 text-xs font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+                {copied ? 'Copied!' : 'Copy'}
+            </button>
+            <pre className="p-4 overflow-auto text-sm text-gray-300 font-mono" style={{ maxHeight: '50vh' }}>
+                <code>{content}</code>
+            </pre>
         </div>
     );
 };
 
-export const ReplitSetupModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+export const FirebaseSetupModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     const [activeTab, setActiveTab] = useState(Object.keys(fileContents)[0]);
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-75 flex justify-center items-center z-50 p-4">
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex justify-center items-center z-50 p-4 animate-fade-in">
             <div className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col border border-gray-700">
-                <header className="flex justify-between items-center p-4 border-b border-gray-700">
-                    <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-teal-300">Download Project Source</h2>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white">Close</button>
-                </header>
-                <div className="p-6 overflow-y-auto">
-                    <div className="mb-4 bg-blue-900/30 border border-blue-700 text-blue-200 p-3 rounded-lg text-sm">
-                        <p className="font-bold mb-1">Deployment Instructions:</p>
-                        <ol className="list-decimal list-inside space-y-1">
-                            <li>These files form a React + Vite application.</li>
-                            <li>Copy/Paste files into your local environment or hosting provider.</li>
-                        </ol>
+                <header className="flex justify-between items-center p-5 border-b border-gray-700 bg-gray-800 rounded-t-xl">
+                    <div className="flex items-center gap-3">
+                         <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-yellow-500" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M11.609 1.487l-6.38 12.023L0 12.023l2.844-5.358 1.944-3.663 3.663-1.944 3.158 1.429zM22.023 12.023l-3.329-6.364L12.391 1.487l6.38 12.023 3.252-1.487zM12 22.513l-4.755-9.155 4.755 4.391 4.755-4.391L12 22.513z"/>
+                         </svg>
+                         <div>
+                             <h2 className="text-xl font-bold text-white">Deploy / Transfer Code</h2>
+                             <p className="text-xs text-gray-400">Configuration files & Git commands</p>
+                         </div>
                     </div>
-                    <div className="border-b border-gray-600">
-                        <nav className="flex flex-wrap -mb-px">
+                    <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors p-2 hover:bg-gray-700 rounded-lg">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </header>
+                <div className="p-6 overflow-y-auto flex-grow">
+                     {/* Instructions */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div className="bg-yellow-900/30 border border-yellow-700 text-yellow-200 p-3 rounded-lg text-sm">
+                            <p className="font-bold mb-2 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                                </svg>
+                                Manual File Transfer:
+                            </p>
+                            <ol className="list-decimal list-inside space-y-1 text-gray-300 text-xs">
+                                <li><strong>Create</strong> a new folder/repo.</li>
+                                <li><strong>Copy</strong> all `src` files & `index.html`.</li>
+                                <li><strong>Copy</strong> config files from the tabs below.</li>
+                                <li><strong>Run:</strong> <code>npm install</code> then <code>npm run dev</code>.</li>
+                            </ol>
+                        </div>
+                        
+                        <div className="bg-gray-700/50 border border-gray-600 text-gray-200 p-3 rounded-lg text-sm">
+                            <p className="font-bold mb-2 flex items-center gap-2">
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clipRule="evenodd" />
+                                </svg>
+                                Switch Repo (Terminal):
+                            </p>
+                            <div className="bg-black p-2 rounded border border-gray-800 font-mono text-xs overflow-x-auto text-green-400">
+                                <div>git remote -v</div>
+                                <div className="text-gray-500"># Replace URL with your new repo:</div>
+                                <div>git remote set-url origin https://github.com/USER/rapidlistingtool.git</div>
+                                <div>git push -u origin main</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {/* Tabs */}
+                    <div className="border-b border-gray-600 sticky top-0 bg-gray-800 z-10 pt-2">
+                        <nav className="flex flex-wrap -mb-px gap-2 pb-2">
                             {Object.keys(fileContents).map(filename => (
-                                <button key={filename} onClick={() => setActiveTab(filename)} className={`whitespace-nowrap py-3 px-4 border-b-2 font-medium text-sm transition-colors ${activeTab === filename ? 'border-blue-400 text-blue-300' : 'border-transparent text-gray-400 hover:text-gray-200'}`}>{filename}</button>
+                                <button 
+                                    key={filename} 
+                                    onClick={() => setActiveTab(filename)} 
+                                    className={`whitespace-nowrap py-2 px-3 rounded-lg font-medium text-xs transition-colors border ${
+                                        activeTab === filename 
+                                            ? 'bg-blue-600 text-white border-blue-500 shadow-lg' 
+                                            : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600 hover:text-gray-200'
+                                    }`}
+                                >
+                                    {filename}
+                                </button>
                             ))}
                         </nav>
                     </div>
-                    <FileContentDisplayer content={fileContents[activeTab]} />
+                    
+                    {/* Content */}
+                    <FileContentDisplayer content={fileContents[activeTab as keyof typeof fileContents]} />
                 </div>
             </div>
         </div>

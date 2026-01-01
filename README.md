@@ -1,20 +1,32 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# RapidListingTool.com
 
-# Run and deploy your AI Studio app
+The ultimate AI-powered listing generator for eBay Motors, Electronics, and General Reselling.
 
-This contains everything you need to run your app locally.
+## Development & Deployment Commands
 
-View your app in AI Studio: https://ai.studio/apps/drive/1Fvdboyik7X2qwbhVwjL9gHbcO6vexk50
+### Update Code in Git
+Use these commands to push your local changes to GitHub/GitLab:
+```bash
+git add .
+git commit -m "Describe your changes here"
+git push origin main
+```
 
-## Run Locally
+### Update Your Live Website (Firebase)
+Use these commands to deploy the current code to your Firebase Hosting URL:
+```bash
+# 1. Build the production files
+npm run build
 
-**Prerequisites:**  Node.js
+# 2. Deploy to Firebase
+firebase deploy --only hosting
+```
 
+### Local Setup
+1. Clone the repo.
+2. Run `npm install`.
+3. Create a `.env` file with `API_KEY=your_key`.
+4. Run `npm run dev` to start the local preview.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Support
+Powered by RapidListingTool.com Viral Generation Engine.

@@ -1,3 +1,4 @@
+// ... existing imports
 import { GoogleGenAI, Type } from "@google/genai";
 
 const API_KEY = process.env.API_KEY;
@@ -8,7 +9,8 @@ const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 export type ListingStyle = 'professional' | 'minimalist' | 'table-layout' | 'bold-classic' | 'modern-card' | 'luxury' | 'vintage' | 'handmade' | 'collectible';
 export type Platform = 'ebay' | 'facebook' | 'craigslist';
-export type ScanType = 'auto-part' | 'general-item';
+export type ScanType = 'auto-part' | 'general-item' | 'electronics';
+export type BackgroundStyle = 'studio-white' | 'industrial' | 'lifestyle-wood' | 'sleek-dark' | 'outdoor-natural';
 
 export interface ListingOptions {
     price?: string;
@@ -18,7 +20,10 @@ export interface ListingOptions {
     mileage?: string;
     acesPiesData?: string; // Raw XML or CSV content
     donorVehicleDetails?: string; // Decoded VIN details
+    embeddedImageUrl?: string; // The base64 image to embed in the description
 }
+
+// ... existing helper functions (imageDataUrlToGenerativePart, decodeVin, extractIdentifierFromImage, optimizeImageBackground, getProductData, performVisualSearch, getStyleInstruction)
 
 const imageDataUrlToGenerativePart = (dataUrl: string) => {
   const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
@@ -53,7 +58,7 @@ export async function decodeVin(vin: string): Promise<string> {
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -80,6 +85,14 @@ export async function extractIdentifierFromImage(imageDataUrl: string, type: Sca
     Return ONLY the alphanumeric string of the most likely OEM Part Number.
   `;
 
+  const electronicsPrompt = `
+    Analyze this image of an electronic device or label.
+    Identify the MODEL NUMBER (e.g., "WH-1000XM4", "A1706", "CUH-7215B").
+    Often found on the back, bottom, or under the battery.
+    If a Serial Number (S/N) is prominent, you may ignore it and focus on the Model Number for identification.
+    Return ONLY the alphanumeric Model Number string.
+  `;
+
   const generalPrompt = `
     Analyze this image of a product.
     Look specifically for a BARCODE (UPC, EAN), ISBN, or a printed Model Number.
@@ -89,14 +102,18 @@ export async function extractIdentifierFromImage(imageDataUrl: string, type: Sca
     Do not add labels like "UPC:" or "Model:". Just return the code.
   `;
 
+  let selectedPrompt = generalPrompt;
+  if (type === 'auto-part') selectedPrompt = autoPrompt;
+  if (type === 'electronics') selectedPrompt = electronicsPrompt;
+
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: { parts: [imagePart, { text: type === 'auto-part' ? autoPrompt : generalPrompt }] },
+      model: 'gemini-3-flash-preview',
+      contents: { parts: [imagePart, { text: selectedPrompt }] },
     });
     const text = response.text.trim();
     if (!text) {
-        throw new Error("The AI returned an empty response. Please try a clearer image of the barcode or part number.");
+        throw new Error("The AI returned an empty response. Please try a clearer picture.");
     }
     return text;
   } catch (error) {
@@ -105,8 +122,50 @@ export async function extractIdentifierFromImage(imageDataUrl: string, type: Sca
   }
 }
 
+export async function optimizeImageBackground(imageDataUrl: string, style: BackgroundStyle = 'studio-white'): Promise<string> {
+  const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
+  
+  let prompt = "Isolate the main object in this image and place it on a clean, pure white professional studio background. Improve lighting slightly for product photography.";
+
+  if (style === 'industrial') {
+      prompt = "Isolate the main object (auto part or tool) and place it on a clean, professional mechanic's workbench surface. The background should be a blurred, high-end workshop environment. Professional lighting.";
+  } else if (style === 'lifestyle-wood') {
+      prompt = "Isolate the main object and place it on a clean, modern wooden tabletop. The background should be a soft, blurred modern interior. Bright, natural lighting.";
+  } else if (style === 'sleek-dark') {
+      prompt = "Isolate the main object and place it on a sleek, dark, slightly reflective surface with dramatic rim lighting. High-contrast, premium look.";
+  } else if (style === 'outdoor-natural') {
+      prompt = "Isolate the main object and place it in a blurred, natural outdoor setting with soft sunlight. Professional depth of field.";
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [
+          imagePart,
+          { text: prompt },
+        ],
+      },
+    });
+
+    if (response.candidates && response.candidates[0].content.parts) {
+        for (const part of response.candidates[0].content.parts) {
+            if (part.inlineData && part.inlineData.data) {
+                return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+            }
+        }
+    }
+    
+    throw new Error("No image generated.");
+  } catch (error) {
+    console.error("Error optimizing image:", error);
+    throw new Error("Failed to process image background.");
+  }
+}
+
 export async function getProductData(identifier: string, type: ScanType): Promise<string> {
-  const autoPrompt = `
+    // ... existing implementation ...
+    const autoPrompt = `
     You are an expert on automotive parts, ACES (Aftermarket Catalog Exchange Standard), and PIES (Product Information Exchange Standard).
     For the given auto part number "${identifier}", perform a search to find its vehicle compatibility (Year, Make, Model, Trim).
     
@@ -115,6 +174,24 @@ export async function getProductData(identifier: string, type: ScanType): Promis
     Do not include any other text, explanation, or markdown formatting like \`\`\`.
     The table should have columns for: "Make", "Model", "Year Range", "Engine/Trim", and "Notes/Attributes".
     If you cannot find any data, return: <p>No compatibility information found for part number ${identifier}.</p>
+  `;
+
+  const electronicsPrompt = `
+    You are an expert consumer electronics specialist.
+    For the device model "${identifier}", find its key technical specifications.
+    
+    Your response must be ONLY a well-structured HTML table with a header row (<th>).
+    Do not include markdown blocks.
+    The table should include columns for: "Spec Category", "Detail".
+    Rows should cover:
+    - Processor / Chipset
+    - RAM / Storage (if applicable)
+    - Screen Size / Resolution (if applicable)
+    - Battery / Power Info
+    - Connectivity (Ports, Wifi, BT)
+    - Release Year
+    
+    If specific specs aren't found, return: <p>No detailed specs found for model ${identifier}.</p>
   `;
 
   const generalPrompt = `
@@ -127,10 +204,14 @@ export async function getProductData(identifier: string, type: ScanType): Promis
     If you cannot find specific data, return: <p>No specific product details found for ID ${identifier}.</p>
   `;
 
+  let selectedPrompt = generalPrompt;
+  if (type === 'auto-part') selectedPrompt = autoPrompt;
+  if (type === 'electronics') selectedPrompt = electronicsPrompt;
+
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: type === 'auto-part' ? autoPrompt : generalPrompt,
+      model: 'gemini-3-flash-preview',
+      contents: selectedPrompt,
       config: {
         tools: [{ googleSearch: {} }],
       },
@@ -148,29 +229,36 @@ export async function getProductData(identifier: string, type: ScanType): Promis
 }
 
 export async function performVisualSearch(imageDataUrl: string, type: ScanType): Promise<string> {
+    // ... existing implementation ...
   const imagePart = imageDataUrlToGenerativePart(imageDataUrl);
   
+  let typeContext = 'product';
+  if (type === 'auto-part') typeContext = 'auto part';
+  if (type === 'electronics') typeContext = 'electronic device';
+
   const prompt = `
     You are an expert visual search assistant.
-    Analyze the provided image ${type === 'auto-part' ? 'of an auto part' : 'of a product'}.
+    Analyze the provided image of a ${typeContext}.
     Use your visual recognition capabilities and Google Search grounding to identify the item.
     
     Return a structured HTML report (do not use Markdown code blocks) with the following sections:
     1. <h3>Visual Identification</h3>
        <ul>
          <li><strong>Identified Item:</strong> [Name/Title]</li>
-         <li><strong>Category/Type:</strong> [Classification]</li>
+         <li><strong>Brand/Manufacturer:</strong> [Brand]</li>
+         <li><strong>Model/Series:</strong> [Model]</li>
        </ul>
     2. <h3>Market Findings</h3>
-       <p>Search online and list 3-5 similar items currently listed on ${type === 'auto-part' ? 'eBay Motors/car-part.com' : 'eBay/Amazon'}. Include approximate price ranges.</p>
-    3. ${type === 'auto-part' ? '<h3>Potential Fitment</h3> <p>Based on visual cues (mounting points, shape), list what vehicles this part likely fits.</p>' : '<h3>Key Features</h3> <p>List visible features, materials, or specifications.</p>'}
+       <p>Search online and list 3-5 similar items currently listed on eBay/Amazon. Include approximate price ranges.</p>
+    3. <h3>Key Details</h3>
+       <p>List visible features, inputs/outputs, condition notes (scratches, wear), or specific part details.</p>
     
     If you cannot identify it, state that clearly in the HTML.
   `;
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: { parts: [imagePart, { text: prompt }] },
       config: {
         tools: [{ googleSearch: {} }],
@@ -188,18 +276,35 @@ export async function performVisualSearch(imageDataUrl: string, type: ScanType):
   }
 }
 
-const getStyleInstruction = (style: ListingStyle, identifier: string, supplementalHtml: string, type: ScanType, statsHtml: string): string => {
+const getStyleInstruction = (style: ListingStyle, identifier: string, supplementalHtml: string, type: ScanType, statsHtml: string, hasImage: boolean): string => {
+    // ... existing implementation with updated signature from previous turn ...
+    // Note: Re-stating here for completeness if needed, but only generateListingContent needs the logic update.
+    // I'll skip re-writing this large function unless logic inside changed.
+    // It seems logic inside is fine, just passed 'hasImage' boolean.
+    // The previous implementation already handles 'hasImage' in getStyleInstruction.
+    
     // Shared instructions
     const commonInstructions = `
         *   Create a concise, SEO-friendly title optimized for search.
         *   Include: Brand, Model, Key Features, and ID "${identifier}".
         *   For Auto Parts: STRICTLY follow the format "Year Make Model PartName Position MPN". Max 80 characters.
+        *   For Electronics: Include Brand, Model, Processor/Spec (if known), and Condition (e.g. "Tested", "Parts Only").
+        ${hasImage ? '*   Include the marker "{{IMAGE_PLACEHOLDER}}" in the HTML where the product image should appear. Place it prominently at the top or inside the main visual container.' : ''}
     `;
-
-    // Branding text logic is handled in ResultCard now, but we guide the structure here.
+    
+    // ... rest of getStyleInstruction ...
     const isAuto = type === 'auto-part';
-    const specTitle = isAuto ? "Vehicle Fitment (ACES)" : "Product Specifications";
-    const condTitle = isAuto ? "Used OEM" : "Pre-Owned / Used";
+    const isElec = type === 'electronics';
+    
+    let specTitle = "Product Specifications";
+    if (isAuto) specTitle = "Vehicle Fitment (ACES)";
+    if (isElec) specTitle = "Technical Specifications";
+
+    let condTitle = "Pre-Owned / Used";
+    if (isAuto) condTitle = "Used OEM";
+    if (isElec) condTitle = "Used - Tested & Working";
+
+    const imgMarker = hasImage ? '{{IMAGE_PLACEHOLDER}}' : '';
 
     if (style === 'minimalist') {
         return `
@@ -207,14 +312,15 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
             **Description Generation (Minimalist HTML):**
             *   Clean, mobile-friendly, bullet points.
             *   Structure:
-                1.  <h2>Title</h2>
-                2.  <h3>Quick Specs</h3>
+                1.  ${imgMarker}
+                2.  <h2>Title</h2>
+                3.  <h3>Quick Specs</h3>
                     <ul>
-                        <li><strong>ID:</strong> ${identifier}</li>
+                        <li><strong>Model/ID:</strong> ${identifier}</li>
                         <li><strong>Condition:</strong> ${condTitle} (See Photos)</li>
                         ${statsHtml}
                     </ul>
-                3.  <h3>${specTitle}</h3>
+                4.  <h3>${specTitle}</h3>
                     ${supplementalHtml}
         `;
     } else if (style === 'table-layout') {
@@ -223,14 +329,15 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
             **Description Generation (Table Layout HTML):**
             *   Structured, technical look.
             *   Structure:
-                1.  <h2>Title</h2>
-                2.  HTML Table (width:100%):
-                    *   <strong>ID/SKU</strong> | ${identifier}
+                1.  ${imgMarker}
+                2.  <h2>Title</h2>
+                3.  HTML Table (width:100%):
+                    *   <strong>Model/SKU</strong> | ${identifier}
                     *   <strong>Condition</strong> | ${condTitle}
-                3.  <h3>Detailed Description</h3>
+                4.  <h3>Detailed Description</h3>
                     <p>[Analyze image and describe item]</p>
-                    ${statsHtml ? `<h3>Donor Vehicle</h3>${statsHtml}` : ''}
-                4.  <h3>${specTitle}</h3>
+                    ${statsHtml ? `<h3>Additional Info</h3>${statsHtml}` : ''}
+                5.  <h3>${specTitle}</h3>
                     ${supplementalHtml}
         `;
     } else if (style === 'bold-classic') {
@@ -239,14 +346,15 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
             **Description Generation (Bold Classic HTML):**
             *   High-contrast, centered, horizontal rules.
             *   Structure:
-                1.  <h1 style="text-align: center; border-bottom: 2px solid #000;">Title</h1>
-                2.  <div style="text-align: center; font-weight: bold;">ID: ${identifier}</div>
-                3.  <hr />
-                4.  <h3>Item Description</h3>
+                1.  ${imgMarker}
+                2.  <h1 style="text-align: center; border-bottom: 2px solid #000;">Title</h1>
+                3.  <div style="text-align: center; font-weight: bold;">ID: ${identifier}</div>
+                4.  <hr />
+                5.  <h3>Item Description</h3>
                     <p>[Analyze image and describe item]</p>
-                    ${statsHtml ? `<div style="background:#eee; padding:10px; margin:10px 0;"><strong>Donor Stats:</strong> ${statsHtml}</div>` : ''}
-                5.  <hr />
-                6.  <h3>${specTitle}</h3>
+                    ${statsHtml ? `<div style="background:#eee; padding:10px; margin:10px 0;"><strong>Stats:</strong> ${statsHtml}</div>` : ''}
+                6.  <hr />
+                7.  <h3>${specTitle}</h3>
                     ${supplementalHtml}
         `;
     } else if (style === 'modern-card') {
@@ -256,13 +364,14 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
             *   Boxed layout, gray headers.
             *   Structure:
                 1.  <div style="background-color: #f3f4f6; padding: 20px;">
+                        ${imgMarker}
                         <h2>Title</h2>
                         <p>ID: <strong>${identifier}</strong> | Condition: <strong>${condTitle}</strong></p>
                     </div>
                 2.  <div style="padding: 20px;">
                         <h3>Details</h3>
                         <p>[Analyze image and describe item]</p>
-                        ${statsHtml ? `<p><strong>Donor Vehicle:</strong> ${statsHtml}</p>` : ''}
+                        ${statsHtml ? `<p><strong>Note:</strong> ${statsHtml}</p>` : ''}
                         <h3>${specTitle}</h3>
                         ${supplementalHtml}
                     </div>
@@ -271,68 +380,84 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
         return `
             ${commonInstructions}
             **Description Generation (Luxury / High-End HTML):**
-            *   Tone: Sophisticated, elegant, emphasizing quality and exclusivity. Use serif fonts (Georgia, Times) in style tags.
+            *   Elegant, minimalist, serif fonts, high-end feel.
             *   Structure:
-                1.  <div style="font-family: Georgia, serif; color: #1a1a1a; line-height: 1.6;">
-                2.  <h2 style="text-align: center; text-transform: uppercase; letter-spacing: 2px; border-bottom: 1px solid #D4AF37; padding-bottom: 10px; margin-bottom: 30px;">${identifier}</h2>
-                3.  <div style="text-align: center; font-style: italic; margin-bottom: 30px;">"A premium selection for the discerning enthusiast."</div>
-                4.  <h3>Exquisite Details</h3>
-                    <p>[Analyze image and describe item with high-end vocabulary]</p>
-                    ${statsHtml ? `<div style="border: 1px solid #D4AF37; padding: 15px; margin: 20px 0;"><strong>Provenance / Donor:</strong> ${statsHtml}</div>` : ''}
-                5.  <h3 style="text-transform: uppercase; letter-spacing: 1px; margin-top: 30px;">Specifications</h3>
-                    ${supplementalHtml}
-                </div>
+                1.  <div style="text-align: center; padding: 40px; border: 1px solid #e5e5e5; max-width: 800px; margin: 0 auto; font-family: Georgia, serif; color: #333;">
+                        ${imgMarker}
+                        <h2 style="text-transform: uppercase; letter-spacing: 3px; font-size: 24px; margin-bottom: 10px; font-weight: normal;">Title</h2>
+                        <div style="width: 40px; height: 1px; background: #000; margin: 20px auto;"></div>
+                        <p style="font-style: italic; color: #777; font-size: 0.9em;">ID: ${identifier} &bull; ${condTitle}</p>
+                        <div style="margin: 40px 0; line-height: 1.8; font-size: 1.1em;">
+                            [Description emphasizing quality, authenticity, and condition]
+                        </div>
+                        ${statsHtml ? `<div style="border-top: 1px solid #eee; border-bottom: 1px solid #eee; padding: 15px 0; margin: 30px 0; font-size: 0.9em; text-transform: uppercase; letter-spacing: 1px;">${statsHtml}</div>` : ''}
+                        <h3 style="text-transform: uppercase; letter-spacing: 2px; font-size: 14px; margin-top: 40px; font-weight: normal;">${specTitle}</h3>
+                        ${supplementalHtml}
+                    </div>
         `;
     } else if (style === 'vintage') {
         return `
             ${commonInstructions}
             **Description Generation (Vintage / Retro HTML):**
-            *   Tone: Nostalgic, emphasizing history, era, and authenticity.
+            *   Warm tones, typewriter font, nostalgic.
             *   Structure:
-                1.  <div style="font-family: 'Courier New', monospace; background-color: #fdfbf7; padding: 20px; border: 2px solid #5c4033; color: #3e2723;">
-                2.  <h2 style="text-align: center; text-decoration: underline; color: #5c4033;">VINTAGE FIND: ${identifier}</h2>
-                3.  <h3>Item History & Condition</h3>
-                    <p>[Describe item focusing on age, patina, and era-specific details]</p>
-                    ${statsHtml ? `<p><strong>Origin:</strong> ${statsHtml}</p>` : ''}
-                4.  <hr style="border-top: 1px dashed #5c4033;" />
-                5.  <h3>Technical Manifest</h3>
-                    ${supplementalHtml}
-                </div>
+                1.  <div style="background-color: #fdf6e3; padding: 40px; border: 4px double #d2b48c; font-family: 'Courier New', Courier, monospace; color: #5b4636;">
+                        ${imgMarker}
+                        <h2 style="text-align: center; border-bottom: 1px dashed #d2b48c; padding-bottom: 20px; margin-bottom: 20px;">Title</h2>
+                        <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 30px;">
+                            <span>ITEM ID: ${identifier}</span>
+                            <span>COND: ${condTitle}</span>
+                        </div>
+                        <div style="line-height: 1.6; text-align: justify;">
+                             [Description highlighting the era, patina, and vintage character]
+                        </div>
+                        ${statsHtml ? `<div style="background: #eee8d5; padding: 15px; margin: 25px 0; border: 1px solid #d2b48c;"><strong>SPECIFICATIONS:</strong> ${statsHtml}</div>` : ''}
+                        <h3 style="margin-top: 30px; text-decoration: underline;">${specTitle}</h3>
+                        ${supplementalHtml}
+                    </div>
         `;
     } else if (style === 'handmade') {
         return `
             ${commonInstructions}
             **Description Generation (Handmade / Artisan HTML):**
-            *   Tone: Warm, personal, emphasizing craftsmanship and uniqueness.
+            *   Clean, earthy, personal, maker-focused.
             *   Structure:
-                1.  <div style="font-family: sans-serif; max-width: 800px; margin: 0 auto; color: #4a5568;">
-                2.  <h2 style="color: #2c7a7b; font-weight: 300; text-align: center;">${identifier}</h2>
-                3.  <h3 style="color: #2d3748;">The Story</h3>
-                    <p>[Describe the item with a focus on materials, texture, and the maker's touch]</p>
-                4.  <div style="background-color: #e6fffa; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #319795;">
-                    <strong>Why it's special:</strong> [Highlight unique features or imperfections that prove it's handmade]
-                </div>
-                5.  <h3 style="color: #2d3748;">Details</h3>
-                    ${supplementalHtml}
-                </div>
+                1.  <div style="font-family: 'Verdana', sans-serif; color: #555; padding: 20px; border: 1px solid #eaeaea; border-radius: 8px;">
+                        ${imgMarker}
+                        <h2 style="color: #6b8e23; font-weight: normal; font-size: 26px;">Title</h2>
+                        <p style="color: #999; font-size: 0.85em; letter-spacing: 0.5px;">ID: ${identifier} | Artisan Quality</p>
+                        <div style="padding: 20px 0; line-height: 1.7;">
+                            [Description focusing on materials, craftsmanship, and unique details]
+                        </div>
+                        ${statsHtml ? `<div style="background: #f8fcf0; padding: 15px; border-left: 4px solid #6b8e23; margin: 20px 0;">${statsHtml}</div>` : ''}
+                        <h3 style="color: #6b8e23; margin-top: 30px;">${specTitle}</h3>
+                        ${supplementalHtml}
+                    </div>
         `;
     } else if (style === 'collectible') {
         return `
             ${commonInstructions}
-            **Description Generation (Collectible / Investment Grade HTML):**
-            *   Tone: Professional, clinical, precise, focused on grading and condition.
+            **Description Generation (Collectible / Investment HTML):**
+            *   Clinical, grading-focused, authoritative.
             *   Structure:
-                1.  <div style="border: 4px double #000; padding: 20px;">
-                2.  <h2 style="text-align: center; background: #000; color: #fff; padding: 5px; font-family: sans-serif;">COLLECTOR'S GRADE: ${identifier}</h2>
-                3.  <div style="display: flex; justify-content: space-between; border-bottom: 2px solid #000; padding: 10px 0; margin-bottom: 20px; font-family: monospace;">
-                        <span><strong>Condition Grade:</strong> [Assess Condition (e.g. Near Mint, Good)]</span>
-                        <span><strong>Authenticity:</strong> Verified</span>
+                1.  <div style="border: 1px solid #333; background: #fff; font-family: Arial, sans-serif;">
+                        <div style="background: #111; color: #fff; padding: 10px 20px; font-weight: bold; letter-spacing: 1px;">
+                            COLLECTOR GRADE LISTING
+                        </div>
+                        <div style="padding: 30px;">
+                            ${imgMarker}
+                            <h2 style="margin-top: 0;">Title</h2>
+                            <table style="width: 100%; border-collapse: collapse; margin: 20px 0; border: 1px solid #ddd;">
+                                <tr style="background: #f5f5f5;"><td style="padding: 10px; border: 1px solid #ddd;"><strong>Catalog ID</strong></td><td style="padding: 10px; border: 1px solid #ddd;">${identifier}</td></tr>
+                                <tr><td style="padding: 10px; border: 1px solid #ddd;"><strong>Condition Grade</strong></td><td style="padding: 10px; border: 1px solid #ddd;">${condTitle}</td></tr>
+                            </table>
+                            <h3>Condition Report</h3>
+                            <p>[Rigorous analysis of condition, flaws, wear, and rarity]</p>
+                            ${statsHtml ? `<p><strong>Attributes:</strong> ${statsHtml}</p>` : ''}
+                            <h3>${specTitle}</h3>
+                            ${supplementalHtml}
+                        </div>
                     </div>
-                4.  <h3>Condition Report</h3>
-                    <p>[Detailed analysis of flaws, wear, or pristine nature. Be extremely specific.]</p>
-                5.  <h3>Item Specifics</h3>
-                    ${supplementalHtml}
-                </div>
         `;
     } else {
         // Professional (Default)
@@ -341,13 +466,15 @@ const getStyleInstruction = (style: ListingStyle, identifier: string, supplement
             **Description Generation (Professional HTML):**
             *   Standard professional listing format.
             *   Structure:
-                a. **Header:** <h2>Title</h2>, <p><strong>ID:</strong> ${identifier}</p>.
-                b. **Product Details:** <h3>Product Details</h3>. Analyze image for condition.
-                ${statsHtml ? `c. **Donor Stats:** <h3>Donor Vehicle Information</h3> <p>${statsHtml}</p>` : ''}
-                d. **Specs:** <h3>${specTitle}</h3> ${supplementalHtml}
+                a. ${imgMarker}
+                b. **Header:** <h2>Title</h2>, <p><strong>ID:</strong> ${identifier}</p>.
+                c. **Product Details:** <h3>Product Details</h3>. Analyze image for condition. 
+                ${isElec ? 'Mention cosmetic condition of screen/casing explicitly.' : ''}
+                ${statsHtml ? `d. **Notes:** <h3>Additional Information</h3> <p>${statsHtml}</p>` : ''}
+                e. **Specs:** <h3>${specTitle}</h3> ${supplementalHtml}
         `;
     }
-};
+}
 
 export async function generateListingContent(
   partImageDataUrl: string,
@@ -361,63 +488,52 @@ export async function generateListingContent(
   const imagePart = imageDataUrlToGenerativePart(partImageDataUrl);
   
   let instructions = '';
-  const specLabel = type === 'auto-part' ? 'Vehicle Fitment' : 'Product Specs';
+  let specLabel = 'Product Specs';
+  if (type === 'auto-part') specLabel = 'Vehicle Fitment';
+  if (type === 'electronics') specLabel = 'Tech Specs';
   
-  // Construct Donor Stats HTML if available
+  // Construct Stats HTML
   let statsHtml = '';
   if (type === 'auto-part') {
       if (options?.donorVehicleDetails) statsHtml += `<strong>Donor Vehicle:</strong> ${options.donorVehicleDetails}<br/>`;
       if (options?.donorVin) statsHtml += `<strong>VIN:</strong> ${options.donorVin}<br/>`;
       if (options?.mileage) statsHtml += `<strong>Mileage:</strong> ${options.mileage}<br/>`;
   }
-
+  
   // Handle condition formatting for FB/Craigslist
-  let conditionText = options?.condition || (type === 'auto-part' ? 'Used OEM' : 'Used');
-  if ((platform === 'facebook' || platform === 'craigslist') && conditionText === 'Used - Fair') {
+  let conditionText = options?.condition || 'Used';
+  if (type === 'auto-part') conditionText = options?.condition || 'Used OEM';
+  if (type === 'electronics') conditionText = options?.condition || 'Used - Working';
+
+  if ((platform === 'facebook' || platform === 'craigslist') && conditionText.includes('Fair')) {
       conditionText += ' (As Is)';
   }
 
-  // ACES/PIES Context Inclusion with ENHANCED PARSING LOGIC
+  // ACES/PIES Context Inclusion
   const acesPiesContext = options?.acesPiesData ? `
-    **CRITICAL: RAW ACES/PIES DATA PROVIDED**
-    The user has uploaded raw Auto Care Association standard data (ACES XML or PIES XML/JSON/CSV).
-    This data is the SOURCE OF TRUTH. You MUST prioritize parsing this data over the image analysis or general knowledge for the description.
-
-    1. **ACES (Vehicle Fitment - XML):** 
-       - Look for <App> nodes (e.g., <App action="A" id="...">).
-       - Extract <BaseVehicle> (YearID, MakeID, ModelID). If these are IDs, infer the Vehicle Name if possible, or output the ID clearly.
-       - Extract Qualifiers: <EngineBase>, <BodyType>, <DriveType>, <Note>, <Qty>.
-       - Construct a "Vehicle Compatibility" HTML table using this exact data.
-       - IGNORE any visual cues if they contradict this data.
-    
-    2. **PIES (Product Attributes - XML/JSON/CSV):**
-       - **XML:** Look for <Item> or <Part> nodes. 
-         - **Identification:** <PartNumber>, <BrandAAIAID> (Brand Code), <BrandLabel>.
-         - **Descriptions:** Look for <Descriptions> nodes. Use "Marketing" or "Extended" descriptions for the body, "Invoice" for the title.
-         - **Details:** <Dimensions>, <Weight>, <Packages>, <HazardousMaterialCode>.
-       - **JSON:** Look for keys like "PartNumber", "BrandAAIAID", "Descriptions", "DigitalAssets".
-       - **CSV:** Look for headers like "PartNumber", "BrandAAIAID", "Description".
-       - **Action:** Extract specific values to populate the "Item Specifics" section and description.
-         - Map <HazardousMaterialCode> -> "Restricted" item specific.
-         - Map <MinimumOrderQuantity> -> "Lot Size".
+    **CRITICAL: RAW DATA PROVIDED**
+    The user has uploaded raw data (XML/CSV). Prioritize this data over image analysis.
     
     **Raw Data:**
     ${options.acesPiesData}
   ` : '';
+
+  // Allow embedded image for ALL platforms (removing ebay check)
+  const hasEmbeddedImage = !!(options?.embeddedImageUrl);
 
   if (platform === 'facebook') {
     instructions = `
         ${acesPiesContext}
         *   Create a catchy, engaging title for Facebook Marketplace (use 1-2 emojis).
         *   **Description Generation (Facebook - Plain Text):**
-        *   Use emojis (🔥, 📦, ✅). No HTML.
+        *   Use emojis (🔥, 📦, ✅). No HTML (unless image is embedded, then minimal).
         *   Structure:
             1.  **Header:** Item Name & ID
             2.  **Price:** ${options?.price || '[Enter Price]'}
             3.  **Location:** ${options?.location || '[Enter Location]'}
             4.  **Condition:** ${conditionText}
             5.  **Description:** 2-3 short sentences.
-            6.  **${specLabel}:** Convert the HTML table below (or ACES data if provided) into a text list.
+            6.  **${specLabel}:** Convert the HTML table below into a text list.
             7.  **Data:** ${supplementalHtml}
             ${type === 'auto-part' && options?.donorVin ? `8. **Donor VIN:** ${options.donorVin}` : ''}
     `;
@@ -426,14 +542,14 @@ export async function generateListingContent(
         ${acesPiesContext}
         *   Create a clear, professional title for Craigslist.
         *   **Description Generation (Craigslist - Plain Text):**
-        *   Clean text. No HTML.
+        *   Clean text. No HTML (unless image is embedded).
         *   Structure:
             1.  **Item:** Name & ID ${identifier}
             2.  **Price:** ${options?.price || '[Enter Price]'}
             3.  **Location:** ${options?.location || '[Enter Location]'}
             4.  **Condition:** ${conditionText}
             5.  **Description:** Detailed description of the item.
-            6.  **${specLabel}:** Convert the HTML table below (or ACES data if provided) into a structured text list.
+            6.  **${specLabel}:** Convert the HTML table below into a structured text list.
             7.  **Data:** ${supplementalHtml}
             ${type === 'auto-part' && options?.donorVin ? `8. **Donor VIN:** ${options.donorVin}` : ''}
     `;
@@ -441,13 +557,14 @@ export async function generateListingContent(
     // eBay (HTML)
     instructions = `
         ${acesPiesContext}
-        ${getStyleInstruction(style, identifier, supplementalHtml, type, statsHtml)}
+        ${getStyleInstruction(style, identifier, supplementalHtml, type, statsHtml, hasEmbeddedImage)}
         ${type === 'auto-part' && options?.donorVehicleDetails ? `*   **Donor Vehicle Identified:** ${options.donorVehicleDetails}. Use this to ensure title accuracy (Year/Make/Model).` : ''}
+        ${type === 'electronics' ? '*   **Electronics Note:** Emphasize that serial numbers are recorded for fraud prevention.' : ''}
     `;
   }
 
   const prompt = `
-    You are an expert copywriter and automotive catalog manager (ACES/PIES specialist).
+    You are an expert copywriter and catalog manager.
     Based on the provided identifier "${identifier}" and the attached image, generate a listing in JSON format.
     
     ${instructions}
@@ -457,7 +574,7 @@ export async function generateListingContent(
 
   try {
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: { parts: [imagePart, { text: prompt }] },
       config: {
         responseMimeType: "application/json",
@@ -476,7 +593,26 @@ export async function generateListingContent(
     if (!jsonText) {
       throw new Error("The AI returned an empty response.");
     }
-    return JSON.parse(jsonText);
+    const result = JSON.parse(jsonText);
+
+    // Smart Image Injection
+    if (hasEmbeddedImage && options?.embeddedImageUrl) {
+        const imgHtml = `
+            <div style="width: 100%; text-align: center; margin-bottom: 25px; padding: 20px; background-color: #ffffff; border: 1px solid #e5e5e5; border-radius: 8px;">
+                <img src="${options.embeddedImageUrl}" alt="${result.title}" style="max-width: 100%; height: auto; max-height: 500px; border-radius: 4px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);" />
+            </div>
+        `;
+        
+        if (result.description.includes('{{IMAGE_PLACEHOLDER}}')) {
+            result.description = result.description.replace('{{IMAGE_PLACEHOLDER}}', imgHtml);
+        } else {
+            // Fallback: Prepend if AI missed the marker or specific template didn't use it
+            // This handles FB/CL cases where {{IMAGE_PLACEHOLDER}} instruction wasn't sent
+            result.description = imgHtml + result.description;
+        }
+    }
+
+    return result;
   } catch (error) {
     console.error("Error generating listing:", error);
     if (error instanceof SyntaxError) {
